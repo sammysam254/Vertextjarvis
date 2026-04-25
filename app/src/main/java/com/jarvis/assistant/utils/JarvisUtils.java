@@ -104,7 +104,7 @@ public class JarvisUtils {
         }
 
         // Generic media intent
-        Intent mediaIntent = new Intent(Intent.ACTION_MUSIC_PLAYER);
+        Intent mediaIntent = new Intent(Intent.ACTION_VIEW);
         mediaIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         context.startActivity(mediaIntent);
     }
