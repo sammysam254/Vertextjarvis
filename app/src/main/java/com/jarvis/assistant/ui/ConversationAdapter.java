@@ -11,20 +11,28 @@ import java.util.List;
 
 public class ConversationAdapter extends RecyclerView.Adapter<ConversationAdapter.ViewHolder> {
 
+    public static class ConversationItem {
+        public final String from;
+        public final String text;
+        public ConversationItem(String from, String text) {
+            this.from = from;
+            this.text = text;
+        }
+    }
+
     private static final int VIEW_USER = 0;
     private static final int VIEW_JARVIS = 1;
     private static final int VIEW_SYSTEM = 2;
 
-    private final List<MainActivity.ConversationItem> items;
+    private final List<ConversationItem> items;
 
-    public ConversationAdapter(List<MainActivity.ConversationItem> items) {
+    public ConversationAdapter(List<ConversationItem> items) {
         this.items = items;
     }
 
     @Override
     public int getItemViewType(int position) {
-        String from = items.get(position).from;
-        switch (from) {
+        switch (items.get(position).from) {
             case "user": return VIEW_USER;
             case "jarvis": return VIEW_JARVIS;
             default: return VIEW_SYSTEM;
@@ -50,9 +58,7 @@ public class ConversationAdapter extends RecyclerView.Adapter<ConversationAdapte
     }
 
     @Override
-    public int getItemCount() {
-        return items.size();
-    }
+    public int getItemCount() { return items.size(); }
 
     static class ViewHolder extends RecyclerView.ViewHolder {
         TextView tvText;
@@ -60,7 +66,7 @@ public class ConversationAdapter extends RecyclerView.Adapter<ConversationAdapte
             super(view);
             tvText = view.findViewById(R.id.tv_message);
         }
-        void bind(MainActivity.ConversationItem item) {
+        void bind(ConversationItem item) {
             if (tvText != null) tvText.setText(item.text);
         }
     }
