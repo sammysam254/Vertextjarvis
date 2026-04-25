@@ -6,7 +6,6 @@
     android:layout_height="match_parent"
     android:background="@color/jarvis_bg">
 
-    <!-- Header -->
     <LinearLayout
         android:id="@+id/header"
         android:layout_width="match_parent"
@@ -40,7 +39,6 @@
             android:background="?attr/selectableItemBackgroundBorderless" />
     </LinearLayout>
 
-    <!-- JARVIS Logo / Orb -->
     <LinearLayout
         android:id="@+id/center_orb"
         android:layout_width="match_parent"
@@ -62,10 +60,9 @@
             android:id="@+id/tv_status"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Listening for \"Jarvis\"..."
+            android:text="Listening for Jarvis..."
             android:textColor="@color/jarvis_blue"
             android:textSize="14sp"
-            android:letterSpacing="0.08"
             android:layout_marginTop="12dp" />
 
         <com.google.android.material.button.MaterialButton
@@ -75,11 +72,9 @@
             android:text="ACTIVATE"
             android:textColor="@color/jarvis_bg"
             android:backgroundTint="@color/jarvis_gold"
-            android:layout_marginTop="16dp"
-            android:letterSpacing="0.12" />
+            android:layout_marginTop="16dp" />
     </LinearLayout>
 
-    <!-- Conversation Feed -->
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rv_conversation"
         android:layout_width="match_parent"
@@ -91,7 +86,6 @@
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent" />
 
-    <!-- Hidden views for backward compat -->
     <TextView
         android:id="@+id/tv_last_command"
         android:layout_width="0dp"
