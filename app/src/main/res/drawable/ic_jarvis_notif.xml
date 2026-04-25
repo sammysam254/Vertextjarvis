@@ -4,7 +4,6 @@
     android:height="24dp"
     android:viewportWidth="24"
     android:viewportHeight="24">
-    <!-- Hexagon outline for notification bar -->
     <path
         android:fillColor="#FFFFFF"
         android:pathData="M12,2 L20,7 L20,17 L12,22 L4,17 L4,7 Z" />

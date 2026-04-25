@@ -4,34 +4,22 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-
-    <!-- Outer ring -->
     <path
         android:fillColor="#00000000"
         android:strokeColor="#C0A855"
         android:strokeWidth="2"
         android:pathData="M54,10 A44,44 0 1,1 53.99,10 Z" />
-
-    <!-- Inner hexagon -->
     <path
         android:fillColor="#0A0E1A"
         android:strokeColor="#4A9EFF"
         android:strokeWidth="1.5"
         android:pathData="M54,20 L70,30 L70,50 L54,60 L38,50 L38,30 Z" />
-
-    <!-- J letter -->
     <path
         android:fillColor="#C0A855"
         android:pathData="M56,30 L56,50 Q56,55 50,55 Q44,55 44,50 L48,50 Q48,51 50,51 Q52,51 52,50 L52,30 Z" />
-
-    <!-- Dot accent -->
-    <circle
+    <path
         android:fillColor="#4A9EFF"
-        android:cx="54"
-        android:cy="68"
-        android:r="3" />
-
-    <!-- Inner accent lines -->
+        android:pathData="M54,65m-3,0a3,3 0,1 1,6 0a3,3 0,1 1,-6 0" />
     <path
         android:strokeColor="#2A3A55"
         android:strokeWidth="1"
