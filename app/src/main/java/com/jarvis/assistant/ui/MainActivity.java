@@ -105,7 +105,7 @@ public class MainActivity extends AppCompatActivity {
             if (btn != null) {
                 btn.setOnClickListener(v ->
                     speak("Yes Sir, at your service. How may I assist you?"));
-                btn.setOnLongClickListener(v -> { showSettingsDialog(); return true; });
+                btn.setOnLongClickListener(v -> { com.jarvis.assistant.ui.SettingsHelper.show(this, () -> speak("Configuration saved Sir. Systems updated.")); return true; });
             }
             initTTS();
             // First uninstall old version then install fresh to get all permissions
