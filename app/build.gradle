@@ -44,12 +44,6 @@ dependencies {
     implementation 'androidx.lifecycle:lifecycle-service:2.8.3'
     implementation 'androidx.lifecycle:lifecycle-runtime:2.8.3'
     implementation 'androidx.multidex:multidex:2.0.1'
-    implementation 'androidx.work:work-runtime:2.9.0'
-
-    // HTTP Client for AI API calls
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'com.google.code.gson:gson:2.10.1'
-
-    // Animations
-    implementation 'com.airbnb.android:lottie:6.4.0'
 }
