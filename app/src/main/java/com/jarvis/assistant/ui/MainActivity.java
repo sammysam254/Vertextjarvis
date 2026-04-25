@@ -278,9 +278,9 @@ public class MainActivity extends AppCompatActivity {
             AccessibilityManager am =
                 (AccessibilityManager) getSystemService(ACCESSIBILITY_SERVICE);
             if (am == null) return false;
-            var services = am.getEnabledAccessibilityServiceList(
+            List<android.accessibilityservice.AccessibilityServiceInfo> services = am.getEnabledAccessibilityServiceList(
                 android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK);
-            for (var s : services)
+            for (android.accessibilityservice.AccessibilityServiceInfo s : services)
                 if (s.getId().contains(getPackageName())) return true;
         } catch (Exception e) { Log.e(TAG, e.getMessage()); }
         return false;
