@@ -6,20 +6,18 @@
     android:orientation="vertical"
     android:gravity="center"
     android:background="#0A0E1A">
-
     <TextView
+        android:id="@+id/tv_status_simple"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:text="J.A.R.V.I.S"
         android:textColor="#C0A855"
         android:textSize="32sp" />
-
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Online and at your service, Sir."
+        android:text="At your service, Sir."
         android:textColor="#4A9EFF"
         android:textSize="14sp"
-        android:layout_marginTop="16dp" />
-
+        android:layout_marginTop="12dp" />
 </LinearLayout>
