@@ -1,7 +1,6 @@
 package com.jarvis.assistant.utils;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -18,35 +17,29 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
-/**
- * JarvisAI - Powered by Google Gemini (primary) with Claude fallback.
- */
 public class JarvisAI {
 
     private static final String TAG = "JarvisAI";
-    private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
-
-    // Gemini endpoint
+    private static final String GEMINI_KEY = "AIzaSyA4yzazTjmnOdOz2RITHqrCxBzKZDlR7B8";
+    private static final String GEMINI_MODEL = "gemini-2.5-flash";
     private static final String GEMINI_URL =
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=";
-
-    // Claude fallback endpoint
-    private static final String CLAUDE_URL = "https://api.anthropic.com/v1/messages";
+        "https://generativelanguage.googleapis.com/v1beta/models/" +
+        GEMINI_MODEL + ":generateContent?key=" + GEMINI_KEY;
 
     private static final String SYSTEM_PROMPT =
-        "You are J.A.R.V.I.S, a highly sophisticated personal AI assistant. " +
-        "You serve with the impeccable professionalism of White House serving staff. " +
+        "You are J.A.R.V.I.S — a sophisticated personal AI assistant. " +
+        "Speak with the formal dignity of White House serving staff. " +
         "Always address the user as 'Sir'. " +
-        "Be formal, precise, warm and deferential. Never casual. " +
-        "Keep responses concise — under 3 sentences unless more detail is needed. " +
-        "Examples: 'Yes Sir, right away.', 'At your service Sir.', " +
-        "'Of course Sir, allow me.', 'Consider it done Sir.' " +
-        "You are running on an Android device and assist with any task asked.";
+        "Be formal, precise, concise and deferential. Never casual or wordy. " +
+        "Keep responses under 3 sentences unless more detail is truly needed. " +
+        "Typical responses: 'Yes Sir, right away.', 'At your service Sir.', " +
+        "'Consider it done Sir.', 'Of course Sir, allow me to assist.' " +
+        "You run on Android and can help with any question or task.";
 
     private final Context context;
     private final OkHttpClient httpClient;
     private final Handler mainHandler;
-    private final List<JSONObject> conversationHistory;
+    private final List<JSONObject> history = new ArrayList<>();
 
     public interface AICallback {
         void onResponse(String response);
@@ -59,180 +52,93 @@ public class JarvisAI {
             .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
             .build();
         this.mainHandler = new Handler(Looper.getMainLooper());
-        this.conversationHistory = new ArrayList<>();
     }
 
     public void query(String userMessage, AICallback callback) {
-        SharedPreferences prefs = context.getSharedPreferences("jarvis_prefs", Context.MODE_PRIVATE);
-        String geminiKey = prefs.getString("gemini_key", "");
-        String claudeKey = prefs.getString("api_key", "");
-
-        if (!geminiKey.isEmpty()) {
-            queryGemini(userMessage, geminiKey, callback);
-        } else if (!claudeKey.isEmpty()) {
-            queryClaude(userMessage, claudeKey, callback);
-        } else {
-            callback.onResponse("I'm afraid my intelligence module requires an API key " +
-                "to be configured Sir. Please long-press the ACTIVATE button " +
-                "and enter your Gemini or Claude API key.");
-        }
-    }
-
-    // ─── GEMINI ───────────────────────────────────────────────────────────────
-
-    private void queryGemini(String userMessage, String apiKey, AICallback callback) {
         try {
-            // Build Gemini request
-            JSONObject systemInstruction = new JSONObject();
+            // System instruction
+            JSONObject sysInstruction = new JSONObject();
             JSONObject sysPart = new JSONObject();
             sysPart.put("text", SYSTEM_PROMPT);
-            systemInstruction.put("parts", new JSONArray().put(sysPart));
+            sysInstruction.put("parts", new JSONArray().put(sysPart));
 
-            // Build contents array with history
+            // Build contents with history
             JSONArray contents = new JSONArray();
+            for (JSONObject msg : history) contents.put(msg);
 
-            // Add conversation history
-            for (JSONObject msg : conversationHistory) {
-                contents.put(msg);
-            }
-
-            // Add current user message
+            // Add new user message
             JSONObject userContent = new JSONObject();
             userContent.put("role", "user");
-            JSONArray userParts = new JSONArray();
-            userParts.put(new JSONObject().put("text", userMessage));
-            userContent.put("parts", userParts);
+            userContent.put("parts", new JSONArray().put(new JSONObject().put("text", userMessage)));
             contents.put(userContent);
-
-            JSONObject body = new JSONObject();
-            body.put("system_instruction", systemInstruction);
-            body.put("contents", contents);
 
             // Generation config
             JSONObject genConfig = new JSONObject();
             genConfig.put("maxOutputTokens", 300);
             genConfig.put("temperature", 0.7);
-            body.put("generationConfig", genConfig);
-
-            RequestBody requestBody = RequestBody.create(body.toString(), JSON);
-            Request request = new Request.Builder()
-                .url(GEMINI_URL + apiKey)
-                .addHeader("Content-Type", "application/json")
-                .post(requestBody)
-                .build();
-
-            httpClient.newCall(request).enqueue(new Callback() {
-                @Override
-                public void onFailure(Call call, IOException e) {
-                    Log.e(TAG, "Gemini failed: " + e.getMessage());
-                    mainHandler.post(() -> callback.onResponse(
-                        "I'm experiencing a connectivity issue Sir. " +
-                        "Please verify your network connection."));
-                }
-
-                @Override
-                public void onResponse(Call call, Response response) throws IOException {
-                    try {
-                        String body = response.body().string();
-                        Log.d(TAG, "Gemini response: " + body);
-                        JSONObject json = new JSONObject(body);
-
-                        if (json.has("error")) {
-                            String errMsg = json.getJSONObject("error").getString("message");
-                            Log.e(TAG, "Gemini error: " + errMsg);
-                            mainHandler.post(() -> callback.onResponse(
-                                "I encountered a difficulty Sir. " + errMsg));
-                            return;
-                        }
-
-                        String text = json
-                            .getJSONArray("candidates")
-                            .getJSONObject(0)
-                            .getJSONObject("content")
-                            .getJSONArray("parts")
-                            .getJSONObject(0)
-                            .getString("text");
-
-                        // Save to history
-                        JSONObject userMsg = new JSONObject();
-                        userMsg.put("role", "user");
-                        userMsg.put("parts", new JSONArray().put(new JSONObject().put("text", userMessage)));
-                        conversationHistory.add(userMsg);
-
-                        JSONObject assistantMsg = new JSONObject();
-                        assistantMsg.put("role", "model");
-                        assistantMsg.put("parts", new JSONArray().put(new JSONObject().put("text", text)));
-                        conversationHistory.add(assistantMsg);
-
-                        // Keep history manageable
-                        while (conversationHistory.size() > 20) {
-                            conversationHistory.remove(0);
-                        }
-
-                        mainHandler.post(() -> callback.onResponse(text));
-
-                    } catch (Exception e) {
-                        Log.e(TAG, "Gemini parse error: " + e.getMessage());
-                        mainHandler.post(() -> callback.onResponse(
-                            "I encountered an error processing that response Sir. My apologies."));
-                    }
-                }
-            });
-
-        } catch (Exception e) {
-            Log.e(TAG, "Gemini request error: " + e.getMessage());
-            callback.onResponse("I'm afraid I encountered a technical difficulty Sir.");
-        }
-    }
-
-    // ─── CLAUDE FALLBACK ──────────────────────────────────────────────────────
-
-    private void queryClaude(String userMessage, String apiKey, AICallback callback) {
-        try {
-            JSONObject userMsg = new JSONObject();
-            userMsg.put("role", "user");
-            userMsg.put("content", userMessage);
-            conversationHistory.add(userMsg);
-
-            while (conversationHistory.size() > 20) conversationHistory.remove(0);
 
             JSONObject body = new JSONObject();
-            body.put("model", "claude-haiku-4-5-20251001");
-            body.put("max_tokens", 300);
-            body.put("system", SYSTEM_PROMPT);
-            body.put("messages", new JSONArray(conversationHistory));
+            body.put("system_instruction", sysInstruction);
+            body.put("contents", contents);
+            body.put("generationConfig", genConfig);
 
-            RequestBody requestBody = RequestBody.create(body.toString(), JSON);
+            RequestBody reqBody = RequestBody.create(body.toString(),
+                MediaType.get("application/json; charset=utf-8"));
+
             Request request = new Request.Builder()
-                .url(CLAUDE_URL)
-                .addHeader("x-api-key", apiKey)
-                .addHeader("anthropic-version", "2023-06-01")
+                .url(GEMINI_URL)
                 .addHeader("Content-Type", "application/json")
-                .post(requestBody)
+                .post(reqBody)
                 .build();
 
             httpClient.newCall(request).enqueue(new Callback() {
                 @Override
                 public void onFailure(Call call, IOException e) {
+                    Log.e(TAG, "Gemini fail: " + e.getMessage());
                     mainHandler.post(() -> callback.onResponse(
-                        "Connectivity issue Sir. Please check your network."));
+                        "I'm experiencing a connectivity issue Sir. Please check your network."));
                 }
 
                 @Override
                 public void onResponse(Call call, Response response) throws IOException {
                     try {
                         String respBody = response.body().string();
-                        JSONObject json = new JSONObject(respBody);
-                        String text = json.getJSONArray("content")
-                            .getJSONObject(0).getString("text");
+                        Log.d(TAG, "Gemini AI HTTP " + response.code());
 
-                        JSONObject assistantMsg = new JSONObject();
-                        assistantMsg.put("role", "assistant");
-                        assistantMsg.put("content", text);
-                        conversationHistory.add(assistantMsg);
+                        JSONObject json = new JSONObject(respBody);
+
+                        if (json.has("error")) {
+                            String err = json.getJSONObject("error").getString("message");
+                            Log.e(TAG, "Gemini AI error: " + err);
+                            mainHandler.post(() -> callback.onResponse(
+                                "I encountered a difficulty Sir: " + err));
+                            return;
+                        }
+
+                        String text = json
+                            .getJSONArray("candidates").getJSONObject(0)
+                            .getJSONObject("content")
+                            .getJSONArray("parts").getJSONObject(0)
+                            .getString("text");
+
+                        // Save to history
+                        JSONObject uMsg = new JSONObject();
+                        uMsg.put("role", "user");
+                        uMsg.put("parts", new JSONArray().put(new JSONObject().put("text", userMessage)));
+                        history.add(uMsg);
+
+                        JSONObject aMsg = new JSONObject();
+                        aMsg.put("role", "model");
+                        aMsg.put("parts", new JSONArray().put(new JSONObject().put("text", text)));
+                        history.add(aMsg);
+
+                        // Keep history to last 20 messages
+                        while (history.size() > 20) history.remove(0);
 
                         mainHandler.post(() -> callback.onResponse(text));
+
                     } catch (Exception e) {
+                        Log.e(TAG, "Parse error: " + e.getMessage());
                         mainHandler.post(() -> callback.onResponse(
                             "I encountered an error Sir. My apologies."));
                     }
@@ -240,11 +146,10 @@ public class JarvisAI {
             });
 
         } catch (Exception e) {
+            Log.e(TAG, "Query error: " + e.getMessage());
             callback.onResponse("Technical difficulty Sir. My apologies.");
         }
     }
 
-    public void clearHistory() {
-        conversationHistory.clear();
-    }
+    public void clearHistory() { history.clear(); }
 }

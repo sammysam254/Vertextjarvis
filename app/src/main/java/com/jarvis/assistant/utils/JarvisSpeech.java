@@ -1,7 +1,6 @@
 package com.jarvis.assistant.utils;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.os.Handler;
@@ -29,11 +28,11 @@ import okhttp3.Response;
 public class JarvisSpeech {
 
     private static final String TAG = "JarvisSpeech";
-
-    // Gemini TTS - using the correct stable endpoint
+    private static final String GEMINI_KEY = "AIzaSyA4yzazTjmnOdOz2RITHqrCxBzKZDlR7B8";
+    private static final String GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts";
     private static final String GEMINI_TTS_URL =
         "https://generativelanguage.googleapis.com/v1beta/models/" +
-        "gemini-2.5-flash-preview-tts:generateContent?key=";
+        GEMINI_TTS_MODEL + ":generateContent?key=" + GEMINI_KEY;
 
     private final Context context;
     private final OkHttpClient httpClient;
@@ -82,12 +81,8 @@ public class JarvisSpeech {
                     if (n.contains("en-gb")) { best = v; break; }
                 }
             }
-            if (best != null) {
-                fallbackTts.setVoice(best);
-                Log.d(TAG, "Using fallback voice: " + best.getName());
-            } else {
-                fallbackTts.setLanguage(Locale.UK);
-            }
+            if (best != null) fallbackTts.setVoice(best);
+            else fallbackTts.setLanguage(Locale.UK);
         } catch (Exception e) {
             try { fallbackTts.setLanguage(Locale.UK); } catch (Exception ignored) {}
         }
@@ -100,24 +95,16 @@ public class JarvisSpeech {
             if (callback != null) callback.onDone();
             return;
         }
-        SharedPreferences prefs = context.getSharedPreferences("jarvis_prefs", Context.MODE_PRIVATE);
-        String geminiKey = prefs.getString("gemini_key", "").trim();
-        Log.d(TAG, "speak() — geminiKey empty=" + geminiKey.isEmpty() + " text=" + text.substring(0, Math.min(30, text.length())));
-
-        if (!geminiKey.isEmpty()) {
-            speakWithGemini(text, geminiKey, callback);
-        } else {
-            Log.w(TAG, "No Gemini key — using fallback TTS");
-            speakWithFallback(text, callback);
-        }
+        Log.d(TAG, "Speaking via Gemini TTS: " + text.substring(0, Math.min(40, text.length())));
+        speakWithGemini(text, callback);
     }
 
-    private void speakWithGemini(String text, String apiKey, SpeechCallback callback) {
+    private void speakWithGemini(String text, SpeechCallback callback) {
         try {
-            // Build request body for Gemini TTS
-            JSONObject voiceConfig = new JSONObject();
             JSONObject prebuiltVoice = new JSONObject();
-            prebuiltVoice.put("voiceName", "Charon"); // Deep formal male voice
+            prebuiltVoice.put("voiceName", "Charon");
+
+            JSONObject voiceConfig = new JSONObject();
             voiceConfig.put("prebuiltVoiceConfig", prebuiltVoice);
 
             JSONObject speechConfig = new JSONObject();
@@ -138,13 +125,11 @@ public class JarvisSpeech {
             body.put("contents", new JSONArray().put(content));
             body.put("generationConfig", genConfig);
 
-            Log.d(TAG, "Gemini TTS request: " + body.toString().substring(0, Math.min(200, body.toString().length())));
-
             RequestBody reqBody = RequestBody.create(body.toString(),
                 MediaType.get("application/json; charset=utf-8"));
 
             Request request = new Request.Builder()
-                .url(GEMINI_TTS_URL + apiKey)
+                .url(GEMINI_TTS_URL)
                 .addHeader("Content-Type", "application/json")
                 .post(reqBody)
                 .build();
@@ -152,7 +137,7 @@ public class JarvisSpeech {
             httpClient.newCall(request).enqueue(new Callback() {
                 @Override
                 public void onFailure(Call call, java.io.IOException e) {
-                    Log.e(TAG, "Gemini TTS network fail: " + e.getMessage());
+                    Log.e(TAG, "Gemini TTS fail: " + e.getMessage());
                     speakWithFallback(text, callback);
                 }
 
@@ -162,25 +147,24 @@ public class JarvisSpeech {
                     try {
                         respBody = response.body().string();
                         Log.d(TAG, "Gemini TTS HTTP " + response.code());
-                        Log.d(TAG, "Gemini TTS body (first 500): " +
-                            respBody.substring(0, Math.min(500, respBody.length())));
 
                         JSONObject json = new JSONObject(respBody);
 
                         if (json.has("error")) {
-                            String errMsg = json.getJSONObject("error").getString("message");
-                            Log.e(TAG, "Gemini TTS API error: " + errMsg);
+                            String err = json.getJSONObject("error").getString("message");
+                            Log.e(TAG, "Gemini TTS error: " + err);
                             speakWithFallback(text, callback);
                             return;
                         }
 
-                        JSONObject candidate = json.getJSONArray("candidates").getJSONObject(0);
+                        JSONObject candidate = json
+                            .getJSONArray("candidates").getJSONObject(0);
                         JSONObject contentObj = candidate.getJSONObject("content");
-                        JSONArray parts = contentObj.getJSONArray("parts");
-                        JSONObject audioPart = parts.getJSONObject(0);
+                        JSONObject audioPart = contentObj.getJSONArray("parts").getJSONObject(0);
 
                         if (!audioPart.has("inlineData")) {
-                            Log.e(TAG, "No inlineData found. Keys: " + audioPart.keys().toString());
+                            Log.e(TAG, "No inlineData. Response: " +
+                                respBody.substring(0, Math.min(400, respBody.length())));
                             speakWithFallback(text, callback);
                             return;
                         }
@@ -188,27 +172,23 @@ public class JarvisSpeech {
                         JSONObject inlineData = audioPart.getJSONObject("inlineData");
                         String audioBase64 = inlineData.getString("data");
                         String mimeType = inlineData.optString("mimeType", "audio/wav");
-                        Log.d(TAG, "Got audio! mimeType=" + mimeType + " dataLen=" + audioBase64.length());
+                        Log.d(TAG, "Got audio! mime=" + mimeType + " b64len=" + audioBase64.length());
 
                         byte[] audioBytes = Base64.decode(audioBase64, Base64.DEFAULT);
                         String ext = mimeType.contains("mp3") ? ".mp3" : ".wav";
-                        File tempFile = new File(context.getCacheDir(),
-                            "j_" + UUID.randomUUID() + ext);
-                        FileOutputStream fos = new FileOutputStream(tempFile);
-                        fos.write(audioBytes);
-                        fos.close();
+                        File tmp = new File(context.getCacheDir(), "j_" + UUID.randomUUID() + ext);
+                        new FileOutputStream(tmp).write(audioBytes);
 
-                        mainHandler.post(() -> playAudio(tempFile, callback));
+                        mainHandler.post(() -> playAudio(tmp, callback));
 
                     } catch (Exception e) {
-                        Log.e(TAG, "Gemini TTS parse error: " + e.getMessage());
-                        Log.e(TAG, "Response was: " + respBody.substring(0, Math.min(300, respBody.length())));
+                        Log.e(TAG, "Parse error: " + e.getMessage());
                         speakWithFallback(text, callback);
                     }
                 }
             });
         } catch (Exception e) {
-            Log.e(TAG, "Gemini TTS build error: " + e.getMessage());
+            Log.e(TAG, "Build error: " + e.getMessage());
             speakWithFallback(text, callback);
         }
     }
@@ -223,7 +203,7 @@ public class JarvisSpeech {
             player.setDataSource(file.getAbsolutePath());
             player.prepare();
             player.start();
-            Log.d(TAG, "Playing Gemini audio successfully!");
+            Log.d(TAG, "Playing Gemini audio!");
 
             player.setOnCompletionListener(mp -> {
                 mp.release();
@@ -231,7 +211,7 @@ public class JarvisSpeech {
                 if (callback != null) mainHandler.post(callback::onDone);
             });
             player.setOnErrorListener((mp, what, extra) -> {
-                Log.e(TAG, "MediaPlayer error what=" + what + " extra=" + extra);
+                Log.e(TAG, "MediaPlayer error: " + what);
                 mp.release();
                 file.delete();
                 speakWithFallback("", callback);
