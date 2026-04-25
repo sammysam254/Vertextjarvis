@@ -1,0 +1,14 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cds
+app/build/
+gradle-wrapper.jar.note
+
+# Keep the wrapper jar
+!gradle/wrapper/gradle-wrapper.jar

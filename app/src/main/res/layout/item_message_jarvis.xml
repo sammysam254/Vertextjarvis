@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- item_message_jarvis.xml — J.A.R.V.I.S bubble (left aligned) -->
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:padding="4dp"
+    android:gravity="start">
+
+    <TextView
+        android:layout_width="20dp"
+        android:layout_height="20dp"
+        android:text="⬡"
+        android:textColor="#C0A855"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:layout_marginEnd="8dp"
+        android:layout_marginTop="4dp" />
+
+    <TextView
+        android:id="@+id/tv_message"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:background="@drawable/bubble_jarvis"
+        android:padding="12dp"
+        android:textColor="#E8E0D0"
+        android:textSize="14sp"
+        android:lineSpacingExtra="2dp"
+        android:layout_marginEnd="40dp" />
+</LinearLayout>

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="@color/jarvis_bg">
+
+    <ImageView
+        android:layout_width="140dp"
+        android:layout_height="140dp"
+        android:src="@drawable/ic_jarvis" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="J.A.R.V.I.S"
+        android:textColor="@color/jarvis_gold"
+        android:textSize="32sp"
+        android:fontFamily="sans-serif-light"
+        android:letterSpacing="0.3"
+        android:layout_marginTop="24dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Just A Rather Very Intelligent System"
+        android:textColor="@color/jarvis_text_dim"
+        android:textSize="12sp"
+        android:letterSpacing="0.1"
+        android:layout_marginTop="8dp" />
+
+    <ProgressBar
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:indeterminateTint="@color/jarvis_gold"
+        android:layout_marginTop="48dp" />
+
+</LinearLayout>

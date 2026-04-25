@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Hexagon outline for notification bar -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,2 L20,7 L20,17 L12,22 L4,17 L4,7 Z" />
+    <path
+        android:fillColor="#0A0E1A"
+        android:pathData="M12,4.5 L18,8 L18,16 L12,19.5 L6,16 L6,8 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M13,8 L13,16 Q13,18 10.5,18 Q8,18 8,16 L10,16 Q10,16.2 10.5,16.2 Q11,16.2 11,16 L11,8 Z" />
+</vector>

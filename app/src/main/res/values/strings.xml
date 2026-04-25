@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">J.A.R.V.I.S</string>
+    <string name="accessibility_service_label">J.A.R.V.I.S Screen Monitor</string>
+    <string name="accessibility_service_description">Allows J.A.R.V.I.S to monitor screen activity and provide intelligent, contextual assistance.</string>
+</resources>
