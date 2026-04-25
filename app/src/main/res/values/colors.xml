@@ -1,23 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Dark Navy base -->
     <color name="jarvis_bg">#0A0E1A</color>
     <color name="jarvis_surface">#111827</color>
-    <color name="jarvis_card">#1A2035</color>
-
-    <!-- Gold accent - Presidential -->
     <color name="jarvis_gold">#C0A855</color>
-    <color name="jarvis_gold_light">#E2C97E</color>
-
-    <!-- Electric Blue accents -->
     <color name="jarvis_blue">#4A9EFF</color>
-    <color name="jarvis_blue_dim">#1E3A5F</color>
-
-    <!-- Text -->
     <color name="jarvis_text">#E8E0D0</color>
     <color name="jarvis_text_dim">#8899AA</color>
-
-    <!-- Standard -->
-    <color name="white">#FFFFFF</color>
-    <color name="black">#000000</color>
 </resources>
