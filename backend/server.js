@@ -13,40 +13,43 @@ const TTS_MODEL = 'gemini-2.5-flash-preview-tts';
 const AI_MODEL = 'gemini-2.5-flash';
 
 const SYSTEM_PROMPT = `You are J.A.R.V.I.S, a sophisticated personal AI assistant.
-Speak with the formal dignity of White House serving staff.
-Always address the user as Sir.
-Be formal, precise and concise. Never casual.
-Keep responses under 2 sentences. Be brief and direct.`;
+Always address the user as Sir. Be formal, precise and concise.
+Keep responses under 2 sentences.`;
 
-const sessions = {};
-const getSession = (id) => { if (!sessions[id]) sessions[id] = []; return sessions[id]; };
-const addSession = (id, role, text) => {
-  const s = getSession(id);
-  s.push({ role, parts: [{ text }] });
-  if (s.length > 10) s.splice(0, 2);
-};
+// Simple in-memory cache — avoids repeat TTS calls
+const audioCache = new Map();
+const MAX_CACHE = 50;
 
-// PCM L16 to WAV converter
-function pcmToWav(pcmBuffer, sampleRate = 24000) {
-  const wav = Buffer.alloc(44 + pcmBuffer.length);
-  wav.write('RIFF', 0);
-  wav.writeUInt32LE(36 + pcmBuffer.length, 4);
-  wav.write('WAVE', 8);
-  wav.write('fmt ', 12);
-  wav.writeUInt32LE(16, 16);
-  wav.writeUInt16LE(1, 20);
-  wav.writeUInt16LE(1, 22);
-  wav.writeUInt32LE(sampleRate, 24);
-  wav.writeUInt32LE(sampleRate * 2, 28);
-  wav.writeUInt16LE(2, 32);
-  wav.writeUInt16LE(16, 34);
-  wav.write('data', 36);
-  wav.writeUInt32LE(pcmBuffer.length, 40);
-  pcmBuffer.copy(wav, 44);
+function cacheGet(key) { return audioCache.get(key); }
+function cacheSet(key, val) {
+  if (audioCache.size >= MAX_CACHE) {
+    // Remove oldest
+    audioCache.delete(audioCache.keys().next().value);
+  }
+  audioCache.set(key, val);
+}
+
+// PCM L16 → WAV
+function pcmToWav(pcm, rate = 24000) {
+  const wav = Buffer.alloc(44 + pcm.length);
+  wav.write('RIFF', 0); wav.writeUInt32LE(36 + pcm.length, 4);
+  wav.write('WAVE', 8); wav.write('fmt ', 12);
+  wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20);
+  wav.writeUInt16LE(1, 22); wav.writeUInt32LE(rate, 24);
+  wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32);
+  wav.writeUInt16LE(16, 34); wav.write('data', 36);
+  wav.writeUInt32LE(pcm.length, 40); pcm.copy(wav, 44);
   return wav;
 }
 
-async function geminiTTS(text, voice = 'Charon') {
+async function doTTS(text, voice = 'Charon') {
+  const cacheKey = text + voice;
+  const cached = cacheGet(cacheKey);
+  if (cached) {
+    console.log('[TTS] Cache hit:', text.substring(0, 40));
+    return cached;
+  }
+
   const r = await axios.post(
     `${BASE}/${TTS_MODEL}:generateContent?key=${GEMINI_KEY}`,
     {
@@ -56,21 +59,29 @@ async function geminiTTS(text, voice = 'Charon') {
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
       }
     },
-    { timeout: 25000 }
+    { timeout: 30000 }
   );
+
   const part = r.data?.candidates?.[0]?.content?.parts?.[0];
-  if (!part?.inlineData?.data) throw new Error('No audio returned');
+  if (!part?.inlineData?.data) throw new Error('No audio in response');
+
   const mime = part.inlineData.mimeType || '';
   const raw = Buffer.from(part.inlineData.data, 'base64');
-  if (mime.includes('L16') || mime.includes('pcm')) {
-    const rate = (mime.match(/rate=(\d+)/) || [])[1] || 24000;
-    return { buffer: pcmToWav(raw, parseInt(rate)), mime: 'audio/wav' };
-  }
-  return { buffer: raw, mime: mime || 'audio/wav' };
+  const buf = (mime.includes('L16') || mime.includes('pcm'))
+    ? pcmToWav(raw, parseInt((mime.match(/rate=(\d+)/) || [0, 24000])[1]))
+    : raw;
+  const finalMime = (mime.includes('L16') || mime.includes('pcm')) ? 'audio/wav' : mime;
+
+  const result = { buffer: buf, mime: finalMime };
+  cacheSet(cacheKey, result);
+  console.log(`[TTS] Generated ${buf.length} bytes, cached`);
+  return result;
 }
 
-async function geminiAI(message, deviceId) {
-  const history = getSession(deviceId);
+async function doAI(message, deviceId, sessions) {
+  if (!sessions[deviceId]) sessions[deviceId] = [];
+  const history = sessions[deviceId];
+
   const r = await axios.post(
     `${BASE}/${AI_MODEL}:generateContent?key=${GEMINI_KEY}`,
     {
@@ -80,119 +91,131 @@ async function geminiAI(message, deviceId) {
     },
     { timeout: 20000 }
   );
+
   const text = r.data.candidates[0].content.parts[0].text;
-  addSession(deviceId, 'user', message);
-  addSession(deviceId, 'model', text);
+  history.push({ role: 'user', parts: [{ text: message }] });
+  history.push({ role: 'model', parts: [{ text }] });
+  if (history.length > 10) history.splice(0, 2);
   return text;
 }
 
-
-// Pre-cached responses for instant playback
-const audioCache = new Map();
-
-async function getCachedTTS(text, voice = 'Charon') {
-  const key = text + voice;
-  if (audioCache.has(key)) {
-    console.log('[CACHE] Hit:', text.substring(0, 40));
-    return audioCache.get(key);
-  }
-  const result = await geminiTTS(text, voice);
-  audioCache.set(key, result);
-  console.log('[CACHE] Stored:', text.substring(0, 40));
-  return result;
-}
-
-// Pre-warm cache on startup with common responses
-async function warmCache() {
-  const phrases = [
-    'Yes Sir.',
-    'At your service Sir.',
-    'Right away Sir.',
-    'Consider it done Sir.',
-    'One moment Sir.',
-    'Of course Sir.',
-    'Understood Sir.',
-    'Very well Sir.',
-    'Good morning Sir. Jarvis is online and at your service.',
-    'Good afternoon Sir. Jarvis is online and at your service.',
-    'Good evening Sir. Jarvis is online and at your service.',
-    'How may I assist you Sir.',
-    'I am listening Sir.'
-  ];
-  console.log('[CACHE] Warming up', phrases.length, 'phrases...');
-  for (const phrase of phrases) {
-    try {
-      await getCachedTTS(phrase);
-      await new Promise(r => setTimeout(r, 500)); // avoid rate limit
-    } catch (e) {
-      console.log('[CACHE] Failed:', phrase, e.message);
-    }
-  }
-  console.log('[CACHE] Warm-up complete');
-}
-
-// Start warming after 2 seconds
-setTimeout(warmCache, 2000);
+const sessions = {};
 
 app.get('/', (req, res) => {
-  res.json({ status: 'online', service: 'J.A.R.V.I.S', key_set: !!GEMINI_KEY });
+  res.json({
+    status: 'online',
+    service: 'J.A.R.V.I.S',
+    key_set: !!GEMINI_KEY,
+    cache_size: audioCache.size
+  });
 });
 
-// Fast TTS only
 app.post('/voice', async (req, res) => {
   try {
     const { text, voice = 'Charon' } = req.body;
     if (!text) return res.status(400).json({ error: 'text required' });
-    console.log(`[TTS] "${text.substring(0, 50)}"`);
-    const { buffer, mime } = await getCachedTTS(text, voice);
-    console.log(`[TTS] OK bytes=${buffer.length}`);
-    res.json({ audio: buffer.toString('base64'), mimeType: mime });
+    if (!GEMINI_KEY) return res.status(500).json({ error: 'No API key', audio: '' });
+
+    console.log(`[TTS] "${text.substring(0, 60)}"`);
+    const { buffer, mime } = await doTTS(text, voice);
+    res.json({ audio: buffer.toString('base64'), mimeType: mime, bytes: buffer.length });
+
   } catch (e) {
-    console.error('[TTS]', e.response?.data?.error?.message || e.message);
-    res.status(500).json({ error: e.message, audio: '' });
+    const msg = e.response?.data?.error?.message || e.message;
+    const status = e.response?.status || 500;
+    console.error('[TTS] Error:', msg);
+
+    // Tell client how long to wait if rate limited
+    let retryAfter = 0;
+    if (status === 429) {
+      const match = msg.match(/retry in (\d+)/i);
+      retryAfter = match ? parseInt(match[1]) : 60;
+    }
+
+    res.status(status).json({ error: msg, audio: '', retryAfter });
   }
 });
 
-// Fast AI only
 app.post('/ai', async (req, res) => {
   try {
     const { message, deviceId = 'default' } = req.body;
     if (!message) return res.json({ text: 'Message required Sir.' });
-    console.log(`[AI] "${message.substring(0, 60)}"`);
-    const text = await geminiAI(message, deviceId);
-    console.log(`[AI] -> "${text.substring(0, 60)}"`);
+    if (!GEMINI_KEY) return res.json({ text: 'API key not configured Sir.' });
+
+    console.log(`[AI] "${message.substring(0, 80)}"`);
+    const text = await doAI(message, deviceId, sessions);
+    console.log(`[AI] -> "${text.substring(0, 80)}"`);
     res.json({ text });
+
   } catch (e) {
-    console.error('[AI]', e.message);
-    res.json({ text: 'I encountered a difficulty Sir.' });
+    console.error('[AI]', e.response?.data?.error?.message || e.message);
+    res.json({ text: 'I encountered a difficulty Sir. Please try again.' });
   }
 });
 
-// FAST SPEAK: AI and TTS run in PARALLEL for speed
 app.post('/speak', async (req, res) => {
   try {
     const { message, deviceId = 'default', voice = 'Charon' } = req.body;
     if (!message) return res.json({ text: 'Message required.', audio: '' });
-    console.log(`[SPEAK] "${message.substring(0, 60)}"`);
-    const start = Date.now();
+    if (!GEMINI_KEY) return res.json({ text: 'API key not configured Sir.', audio: '' });
 
-    // Step 1: Get AI text first (needed for TTS input)
-    const aiText = await geminiAI(message, deviceId);
-    console.log(`[SPEAK] AI done in ${Date.now()-start}ms: "${aiText.substring(0,60)}"`);
+    console.log(`[SPEAK] "${message.substring(0, 80)}"`);
 
-    // Step 2: TTS on AI text
+    // Run AI first
+    const aiText = await doAI(message, deviceId, sessions);
+    console.log(`[SPEAK] AI -> "${aiText.substring(0, 80)}"`);
+
+    // Then TTS
     try {
-      const { buffer, mime } = await geminiTTS(aiText, voice);
-      console.log(`[SPEAK] Total ${Date.now()-start}ms bytes=${buffer.length}`);
+      const { buffer, mime } = await doTTS(aiText, voice);
       res.json({ text: aiText, audio: buffer.toString('base64'), mimeType: mime });
     } catch (ttsErr) {
-      console.error('[SPEAK] TTS failed:', ttsErr.message);
-      res.json({ text: aiText, audio: '' });
+      const msg = ttsErr.response?.data?.error?.message || ttsErr.message;
+      console.error('[SPEAK] TTS failed:', msg);
+      // Return text only — client handles gracefully
+      res.json({ text: aiText, audio: '', ttsError: msg });
     }
+
   } catch (e) {
     console.error('[SPEAK]', e.message);
     res.json({ text: 'I encountered a difficulty Sir.', audio: '' });
   }
+});
+
+app.post('/debug-tts', async (req, res) => {
+  const { text = 'Hello Sir', voice = 'Charon' } = req.body;
+  const models = ['gemini-2.5-flash-preview-tts', 'gemini-2.5-pro-preview-tts'];
+  const results = {};
+
+  for (const model of models) {
+    try {
+      const r = await axios.post(
+        `${BASE}/${model}:generateContent?key=${GEMINI_KEY}`,
+        {
+          contents: [{ role: 'user', parts: [{ text }] }],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
+          }
+        },
+        { timeout: 20000 }
+      );
+      const part = r.data?.candidates?.[0]?.content?.parts?.[0];
+      results[model] = {
+        success: !!part?.inlineData?.data,
+        bytes: part?.inlineData?.data
+          ? Buffer.from(part.inlineData.data, 'base64').length : 0,
+        mime: part?.inlineData?.mimeType || 'none'
+      };
+    } catch (e) {
+      results[model] = {
+        success: false,
+        error: e.response?.data?.error?.message || e.message,
+        status: e.response?.status
+      };
+    }
+  }
+  res.json(results);
 });
 
 app.delete('/session/:id', (req, res) => {
@@ -200,25 +223,14 @@ app.delete('/session/:id', (req, res) => {
   res.json({ message: 'Session cleared Sir.' });
 });
 
-
-// Keep Render awake — ping self every 14 minutes
+// Keep Render awake
 const https = require('https');
 setInterval(() => {
   const url = process.env.RENDER_EXTERNAL_URL || 'https://vertextjarvis.onrender.com';
-  https.get(url, (r) => console.log('[PING] awake, status=' + r.statusCode))
-       .on('error', (e) => console.log('[PING] error:', e.message));
+  https.get(url, r => console.log('[PING] awake status=' + r.statusCode))
+       .on('error', e => console.log('[PING] error:', e.message));
 }, 14 * 60 * 1000);
 
 app.listen(PORT, () => {
   console.log(`J.A.R.V.I.S Backend port=${PORT} key=${GEMINI_KEY ? 'SET' : 'MISSING'}`);
 });
-
-// Keep-alive ping every 14 minutes to prevent Render sleep
-setInterval(() => {
-  const http = require('http');
-  const https = require('https');
-  const url = process.env.RENDER_EXTERNAL_URL || 'https://vertextjarvis.onrender.com';
-  https.get(url + '/', (res) => {
-    console.log('[PING] Keep-alive:', res.statusCode);
-  }).on('error', (e) => console.log('[PING] Error:', e.message));
-}, 14 * 60 * 1000);
