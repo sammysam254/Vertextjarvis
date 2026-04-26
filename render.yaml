@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: jarvis-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: GEMINI_KEY
+        value: AIzaSyA4yzazTjmnOdOz2RITHqrCxBzKZDlR7B8
+      - key: PORT
+        value: 3000
+    plan: free

@@ -8,10 +8,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
-import android.speech.tts.Voice;
 import android.util.Base64;
 import android.util.Log;
-import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -27,10 +25,9 @@ import okhttp3.Response;
 public class JarvisSpeech {
 
     private static final String TAG = "JarvisSpeech";
-    private static final String GEMINI_KEY = "AIzaSyA4yzazTjmnOdOz2RITHqrCxBzKZDlR7B8";
-    private static final String TTS_URL =
-        "https://generativelanguage.googleapis.com/v1beta/models/" +
-        "gemini-2.5-flash-preview-tts:generateContent?key=" + GEMINI_KEY;
+
+    // ── UPDATE THIS after Render deployment ───────────────────────────────────
+    public static final String BACKEND = "https://jarvis-backend-xxxx.onrender.com";
 
     private final Context context;
     private final Handler mainHandler;
@@ -45,7 +42,7 @@ public class JarvisSpeech {
         this.mainHandler = new Handler(Looper.getMainLooper());
         this.http = new OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
-            .readTimeout(20, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
             .build();
         initFallback();
     }
@@ -67,78 +64,58 @@ public class JarvisSpeech {
     public void speak(String text) { speak(text, null); }
 
     public void speak(final String text, final SpeechCallback cb) {
-        if (text == null || text.isEmpty()) { if (cb != null) cb.onDone(); return; }
-        Log.d(TAG, "Speaking: " + text.substring(0, Math.min(60, text.length())));
-        new Thread(() -> callGeminiTTS(text, cb)).start();
+        if (text == null || text.isEmpty()) {
+            if (cb != null) cb.onDone();
+            return;
+        }
+        Log.d(TAG, "speak() → " + text.substring(0, Math.min(50, text.length())));
+        new Thread(() -> callBackendVoice(text, cb)).start();
     }
 
-    private void callGeminiTTS(String text, SpeechCallback cb) {
+    private void callBackendVoice(String text, SpeechCallback cb) {
         try {
-            JSONObject part = new JSONObject();
-            part.put("text", text);
-
-            JSONObject content = new JSONObject();
-            content.put("role", "user");
-            content.put("parts", new JSONArray().put(part));
-
-            JSONObject prebuilt = new JSONObject();
-            prebuilt.put("voiceName", "Charon");
-
-            JSONObject voiceCfg = new JSONObject();
-            voiceCfg.put("prebuiltVoiceConfig", prebuilt);
-
-            JSONObject speechCfg = new JSONObject();
-            speechCfg.put("voiceConfig", voiceCfg);
-
-            JSONObject genCfg = new JSONObject();
-            genCfg.put("responseModalities", new JSONArray().put("AUDIO"));
-            genCfg.put("speechConfig", speechCfg);
-
             JSONObject body = new JSONObject();
-            body.put("contents", new JSONArray().put(content));
-            body.put("generationConfig", genCfg);
+            body.put("text", text);
+            body.put("voice", "Charon");
 
-            RequestBody reqBody = RequestBody.create(
-                body.toString(), MediaType.get("application/json"));
             Request req = new Request.Builder()
-                .url(TTS_URL)
-                .post(reqBody)
+                .url(BACKEND + "/voice")
+                .post(RequestBody.create(body.toString(),
+                    MediaType.get("application/json")))
                 .header("Content-Type", "application/json")
                 .build();
 
-            Response response = http.newCall(req).execute();
-            String respStr = response.body().string();
-            Log.d(TAG, "TTS HTTP=" + response.code() +
-                " preview=" + respStr.substring(0, Math.min(200, respStr.length())));
+            Response resp = http.newCall(req).execute();
+            String respStr = resp.body().string();
+            Log.d(TAG, "Backend /voice HTTP=" + resp.code());
 
-            JSONObject json = new JSONObject(respStr);
-            if (json.has("error")) {
-                Log.e(TAG, "TTS API err: " + json.getJSONObject("error").getString("message"));
+            if (!resp.isSuccessful()) {
+                Log.e(TAG, "Backend error: " + respStr);
                 fallback(text, cb);
                 return;
             }
 
-            JSONObject inlineData = json
-                .getJSONArray("candidates").getJSONObject(0)
-                .getJSONObject("content")
-                .getJSONArray("parts").getJSONObject(0)
-                .getJSONObject("inlineData");
+            JSONObject json = new JSONObject(respStr);
+            if (!json.has("audio")) {
+                Log.e(TAG, "No audio in response: " + respStr);
+                fallback(text, cb);
+                return;
+            }
 
-            String b64 = inlineData.getString("data");
-            String mime = inlineData.optString("mimeType", "audio/wav");
+            byte[] audioBytes = Base64.decode(json.getString("audio"), Base64.DEFAULT);
+            String mime = json.optString("mimeType", "audio/wav");
             String ext = mime.contains("mp3") ? ".mp3" : ".wav";
 
-            byte[] audio = Base64.decode(b64, Base64.DEFAULT);
             File f = new File(context.getCacheDir(), "tts_" + UUID.randomUUID() + ext);
             FileOutputStream fos = new FileOutputStream(f);
-            fos.write(audio);
+            fos.write(audioBytes);
             fos.close();
 
-            Log.d(TAG, "Audio saved: " + f.length() + " bytes, mime=" + mime);
+            Log.d(TAG, "Audio ready: " + audioBytes.length + " bytes");
             mainHandler.post(() -> playFile(f, cb));
 
         } catch (Exception e) {
-            Log.e(TAG, "callGeminiTTS error: " + e.getMessage());
+            Log.e(TAG, "callBackendVoice: " + e.getMessage());
             fallback(text, cb);
         }
     }
@@ -155,19 +132,20 @@ public class JarvisSpeech {
             mp.prepare();
             mp.setVolume(1.0f, 1.0f);
             mp.start();
-            Log.d(TAG, "Gemini audio playing ✓ size=" + f.length());
+            Log.d(TAG, "Playing Gemini audio via backend ✓");
+
             mp.setOnCompletionListener(m -> {
                 m.release(); f.delete();
                 if (cb != null) mainHandler.post(cb::onDone);
             });
             mp.setOnErrorListener((m, w, x) -> {
-                Log.e(TAG, "MediaPlayer error=" + w + "/" + x);
+                Log.e(TAG, "MediaPlayer error=" + w);
                 m.release(); f.delete();
                 if (cb != null) mainHandler.post(cb::onDone);
                 return true;
             });
         } catch (Exception e) {
-            Log.e(TAG, "playFile error: " + e.getMessage());
+            Log.e(TAG, "playFile: " + e.getMessage());
             if (cb != null) mainHandler.post(cb::onDone);
         }
     }
@@ -175,17 +153,25 @@ public class JarvisSpeech {
     private void fallback(String text, SpeechCallback cb) {
         mainHandler.post(() -> {
             try {
-                if (fallbackTts != null && fallbackReady && text != null && !text.isEmpty()) {
+                if (fallbackTts != null && fallbackReady
+                        && text != null && !text.isEmpty()) {
                     String id = "fb_" + System.currentTimeMillis();
                     if (cb != null) {
-                        fallbackTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
-                            @Override public void onStart(String u) {}
-                            @Override public void onDone(String u) { mainHandler.post(cb::onDone); }
-                            @Override public void onError(String u) { mainHandler.post(cb::onDone); }
-                        });
+                        fallbackTts.setOnUtteranceProgressListener(
+                            new UtteranceProgressListener() {
+                                @Override public void onStart(String u) {}
+                                @Override public void onDone(String u) {
+                                    mainHandler.post(cb::onDone);
+                                }
+                                @Override public void onError(String u) {
+                                    mainHandler.post(cb::onDone);
+                                }
+                            });
                     }
                     fallbackTts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id);
-                } else { if (cb != null) cb.onDone(); }
+                } else {
+                    if (cb != null) cb.onDone();
+                }
             } catch (Exception e) {
                 Log.e(TAG, "fallback: " + e.getMessage());
                 if (cb != null) cb.onDone();
@@ -193,11 +179,20 @@ public class JarvisSpeech {
         });
     }
 
-    public void stop() { try { if (fallbackTts != null) fallbackTts.stop(); } catch (Exception ignored) {} }
-    public void shutdown() {
-        try { if (fallbackTts != null) { fallbackTts.stop(); fallbackTts.shutdown(); } }
+    public void stop() {
+        try { if (fallbackTts != null) fallbackTts.stop(); }
         catch (Exception ignored) {}
     }
+
+    public void shutdown() {
+        try {
+            if (fallbackTts != null) {
+                fallbackTts.stop();
+                fallbackTts.shutdown();
+            }
+        } catch (Exception ignored) {}
+    }
+
     public void greetOnStart() {
         int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
         String t = h < 12 ? "morning" : h < 17 ? "afternoon" : "evening";

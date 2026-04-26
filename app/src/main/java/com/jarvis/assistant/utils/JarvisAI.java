@@ -4,13 +4,8 @@ import android.content.Context;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
-import org.json.JSONArray;
 import org.json.JSONObject;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import okhttp3.Call;
-import okhttp3.Callback;
+import java.util.concurrent.TimeUnit;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -20,136 +15,141 @@ import okhttp3.Response;
 public class JarvisAI {
 
     private static final String TAG = "JarvisAI";
-    private static final String GEMINI_KEY = "AIzaSyA4yzazTjmnOdOz2RITHqrCxBzKZDlR7B8";
-    private static final String GEMINI_MODEL = "gemini-2.5-flash";
-    private static final String GEMINI_URL =
-        "https://generativelanguage.googleapis.com/v1beta/models/" +
-        GEMINI_MODEL + ":generateContent?key=" + GEMINI_KEY;
 
-    private static final String SYSTEM_PROMPT =
-        "You are J.A.R.V.I.S — a sophisticated personal AI assistant. " +
-        "Speak with the formal dignity of White House serving staff. " +
-        "Always address the user as 'Sir'. " +
-        "Be formal, precise, concise and deferential. Never casual or wordy. " +
-        "Keep responses under 3 sentences unless more detail is truly needed. " +
-        "Typical responses: 'Yes Sir, right away.', 'At your service Sir.', " +
-        "'Consider it done Sir.', 'Of course Sir, allow me to assist.' " +
-        "You run on Android and can help with any question or task.";
+    public interface AICallback { void onResponse(String response); }
 
     private final Context context;
-    private final OkHttpClient httpClient;
     private final Handler mainHandler;
-    private final List<JSONObject> history = new ArrayList<>();
-
-    public interface AICallback {
-        void onResponse(String response);
-    }
+    private final OkHttpClient http;
+    private final String deviceId;
 
     public JarvisAI(Context context) {
         this.context = context;
-        this.httpClient = new OkHttpClient.Builder()
-            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-            .build();
         this.mainHandler = new Handler(Looper.getMainLooper());
+        this.http = new OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .build();
+        // Unique device ID using Android ID
+        this.deviceId = android.provider.Settings.Secure.getString(
+            context.getContentResolver(),
+            android.provider.Settings.Secure.ANDROID_ID);
     }
 
-    public void query(String userMessage, AICallback callback) {
-        try {
-            // System instruction
-            JSONObject sysInstruction = new JSONObject();
-            JSONObject sysPart = new JSONObject();
-            sysPart.put("text", SYSTEM_PROMPT);
-            sysInstruction.put("parts", new JSONArray().put(sysPart));
+    public void query(String message, AICallback callback) {
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("message", message);
+                body.put("deviceId", deviceId);
 
-            // Build contents with history
-            JSONArray contents = new JSONArray();
-            for (JSONObject msg : history) contents.put(msg);
+                Request req = new Request.Builder()
+                    .url(JarvisSpeech.BACKEND + "/ai")
+                    .post(RequestBody.create(body.toString(),
+                        MediaType.get("application/json")))
+                    .header("Content-Type", "application/json")
+                    .build();
 
-            // Add new user message
-            JSONObject userContent = new JSONObject();
-            userContent.put("role", "user");
-            userContent.put("parts", new JSONArray().put(new JSONObject().put("text", userMessage)));
-            contents.put(userContent);
+                Response resp = http.newCall(req).execute();
+                String respStr = resp.body().string();
+                Log.d(TAG, "Backend /ai HTTP=" + resp.code());
 
-            // Generation config
-            JSONObject genConfig = new JSONObject();
-            genConfig.put("maxOutputTokens", 300);
-            genConfig.put("temperature", 0.7);
+                JSONObject json = new JSONObject(respStr);
+                String text = json.optString("text",
+                    "I encountered a difficulty Sir. My apologies.");
 
-            JSONObject body = new JSONObject();
-            body.put("system_instruction", sysInstruction);
-            body.put("contents", contents);
-            body.put("generationConfig", genConfig);
+                mainHandler.post(() -> callback.onResponse(text));
 
-            RequestBody reqBody = RequestBody.create(body.toString(),
-                MediaType.get("application/json; charset=utf-8"));
+            } catch (Exception e) {
+                Log.e(TAG, "query error: " + e.getMessage());
+                mainHandler.post(() -> callback.onResponse(
+                    "I'm having trouble connecting to my intelligence module Sir. " +
+                    "Please check your internet connection."));
+            }
+        }).start();
+    }
 
-            Request request = new Request.Builder()
-                .url(GEMINI_URL)
-                .addHeader("Content-Type", "application/json")
-                .post(reqBody)
-                .build();
+    // Combined AI + TTS in one backend call — more efficient
+    public void queryAndSpeak(String message, JarvisSpeech speech,
+            AICallback textCallback) {
+        new Thread(() -> {
+            try {
+                JSONObject body = new JSONObject();
+                body.put("message", message);
+                body.put("deviceId", deviceId);
+                body.put("voice", "Charon");
 
-            httpClient.newCall(request).enqueue(new Callback() {
-                @Override
-                public void onFailure(Call call, IOException e) {
-                    Log.e(TAG, "Gemini fail: " + e.getMessage());
-                    mainHandler.post(() -> callback.onResponse(
-                        "I'm experiencing a connectivity issue Sir. Please check your network."));
-                }
+                Request req = new Request.Builder()
+                    .url(JarvisSpeech.BACKEND + "/speak")
+                    .post(RequestBody.create(body.toString(),
+                        MediaType.get("application/json")))
+                    .header("Content-Type", "application/json")
+                    .build();
 
-                @Override
-                public void onResponse(Call call, Response response) throws IOException {
-                    try {
-                        String respBody = response.body().string();
-                        Log.d(TAG, "Gemini AI HTTP " + response.code());
+                Response resp = http.newCall(req).execute();
+                String respStr = resp.body().string();
+                Log.d(TAG, "Backend /speak HTTP=" + resp.code());
 
-                        JSONObject json = new JSONObject(respBody);
+                JSONObject json = new JSONObject(respStr);
+                String text = json.optString("text", "I encountered a difficulty Sir.");
+                String audio = json.optString("audio", "");
+                String mime = json.optString("mimeType", "audio/wav");
 
-                        if (json.has("error")) {
-                            String err = json.getJSONObject("error").getString("message");
-                            Log.e(TAG, "Gemini AI error: " + err);
-                            mainHandler.post(() -> callback.onResponse(
-                                "I encountered a difficulty Sir: " + err));
-                            return;
+                // Deliver text to UI
+                mainHandler.post(() -> textCallback.onResponse(text));
+
+                // Play audio if present
+                if (!audio.isEmpty() && speech != null) {
+                    byte[] audioBytes = android.util.Base64.decode(audio, android.util.Base64.DEFAULT);
+                    String ext = mime.contains("mp3") ? ".mp3" : ".wav";
+                    java.io.File f = new java.io.File(
+                        context.getCacheDir(), "speak_" + java.util.UUID.randomUUID() + ext);
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(f);
+                    fos.write(audioBytes);
+                    fos.close();
+
+                    Handler h = new Handler(Looper.getMainLooper());
+                    h.post(() -> {
+                        try {
+                            android.media.MediaPlayer mp = new android.media.MediaPlayer();
+                            mp.setAudioAttributes(new android.media.AudioAttributes.Builder()
+                                .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
+                                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                                .setLegacyStreamType(android.media.AudioManager.STREAM_MUSIC)
+                                .build());
+                            mp.setDataSource(f.getAbsolutePath());
+                            mp.prepare();
+                            mp.setVolume(1.0f, 1.0f);
+                            mp.start();
+                            Log.d(TAG, "Playing combined speak audio ✓");
+                            mp.setOnCompletionListener(m -> { m.release(); f.delete(); });
+                            mp.setOnErrorListener((m, w, x) -> {
+                                m.release(); f.delete(); return true;
+                            });
+                        } catch (Exception e) {
+                            Log.e(TAG, "playFile: " + e.getMessage());
                         }
-
-                        String text = json
-                            .getJSONArray("candidates").getJSONObject(0)
-                            .getJSONObject("content")
-                            .getJSONArray("parts").getJSONObject(0)
-                            .getString("text");
-
-                        // Save to history
-                        JSONObject uMsg = new JSONObject();
-                        uMsg.put("role", "user");
-                        uMsg.put("parts", new JSONArray().put(new JSONObject().put("text", userMessage)));
-                        history.add(uMsg);
-
-                        JSONObject aMsg = new JSONObject();
-                        aMsg.put("role", "model");
-                        aMsg.put("parts", new JSONArray().put(new JSONObject().put("text", text)));
-                        history.add(aMsg);
-
-                        // Keep history to last 20 messages
-                        while (history.size() > 20) history.remove(0);
-
-                        mainHandler.post(() -> callback.onResponse(text));
-
-                    } catch (Exception e) {
-                        Log.e(TAG, "Parse error: " + e.getMessage());
-                        mainHandler.post(() -> callback.onResponse(
-                            "I encountered an error Sir. My apologies."));
-                    }
+                    });
                 }
-            });
 
-        } catch (Exception e) {
-            Log.e(TAG, "Query error: " + e.getMessage());
-            callback.onResponse("Technical difficulty Sir. My apologies.");
-        }
+            } catch (Exception e) {
+                Log.e(TAG, "queryAndSpeak error: " + e.getMessage());
+                mainHandler.post(() -> textCallback.onResponse(
+                    "Connection error Sir. Please check your internet."));
+            }
+        }).start();
     }
 
-    public void clearHistory() { history.clear(); }
+    public void clearHistory() {
+        new Thread(() -> {
+            try {
+                Request req = new Request.Builder()
+                    .url(JarvisSpeech.BACKEND + "/session/" + deviceId)
+                    .delete()
+                    .build();
+                http.newCall(req).execute();
+                Log.d(TAG, "Session cleared");
+            } catch (Exception e) { Log.e(TAG, e.getMessage()); }
+        }).start();
+    }
 }

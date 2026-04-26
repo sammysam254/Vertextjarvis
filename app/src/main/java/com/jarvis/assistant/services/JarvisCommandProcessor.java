@@ -348,7 +348,7 @@ public class JarvisCommandProcessor {
             fullQuery = cmd + "\n\n[Screen context: " + lastScreenContent + "]";
         }
         final String q = fullQuery;
-        speech.speak("Allow me a moment Sir.");
+        // Using backend speak
         ai.query(q, response -> {
             broadcastToUI("response", response);
             speech.speak(response);
