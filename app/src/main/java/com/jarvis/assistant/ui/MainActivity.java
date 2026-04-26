@@ -5,15 +5,14 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 import android.util.Log;
-import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -32,31 +31,25 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
     private static final int PERM_REQ = 200;
     private static final int OVERLAY_REQ = 201;
-    private static final String PREFS = "jarvis_prefs";
-    private static final String KEY_SETUP_DONE = "setup_done";
 
     private TextView tvStatus;
     private Button btnActivate;
     private JarvisSpeech speech;
     private boolean receiverRegistered = false;
-    private Handler handler = new Handler();
+    private final Handler handler = new Handler(Looper.getMainLooper());
 
-    private BroadcastReceiver uiReceiver = new BroadcastReceiver() {
+    private final BroadcastReceiver uiReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context ctx, Intent intent) {
             try {
-                if ("com.jarvis.UI_UPDATE".equals(intent.getAction())) {
-                    String content = intent.getStringExtra("content");
-                    String type = intent.getStringExtra("type");
-                    if (content != null) {
-                        runOnUiThread(() -> {
-                            if (tvStatus != null) tvStatus.setText(content);
-                        });
+                String content = intent.getStringExtra("content");
+                String type = intent.getStringExtra("type");
+                runOnUiThread(() -> {
+                    if (tvStatus != null && content != null
+                            && !"command".equals(type)) {
+                        tvStatus.setText(content);
                     }
-                } else if ("com.jarvis.STATE_CHANGE".equals(intent.getAction())) {
-                    String state = intent.getStringExtra("state");
-                    runOnUiThread(() -> updateStatus(state));
-                }
+                });
             } catch (Exception e) { Log.e(TAG, e.getMessage()); }
         }
     };
@@ -65,44 +58,53 @@ public class MainActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Global crash handler
+        // Crash safety net
         Thread.setDefaultUncaughtExceptionHandler((t, e) ->
             Log.e("JARVIS_CRASH", "FATAL: " + e.getMessage(), e));
 
-        try {
-            setContentView(R.layout.activity_simple);
+        // Set layout FIRST — before anything else
+        setContentView(R.layout.activity_simple);
 
-            // Bind views
-            tvStatus = findViewById(R.id.tv_status_simple);
-            btnActivate = findViewById(R.id.btn_test);
+        // Bind views
+        tvStatus = findViewById(R.id.tv_status_simple);
+        btnActivate = findViewById(R.id.btn_test);
 
-            if (tvStatus != null) tvStatus.setText("J.A.R.V.I.S — Starting up...");
+        // Show UI immediately
+        if (tvStatus != null) tvStatus.setText("J.A.R.V.I.S — Ready");
 
-            // Button listeners
-            if (btnActivate != null) {
-                btnActivate.setOnClickListener(v -> {
-                    if (speech != null)
-                        speech.speak("Yes Sir, at your service. How may I assist you?");
-                    if (tvStatus != null) tvStatus.setText("Listening for your command, Sir...");
-                });
-                btnActivate.setOnLongClickListener(v -> {
-                    showSettingsDialog();
-                    return true;
-                });
-            }
-
-            // Init speech immediately — no waiting
-            speech = new JarvisSpeech(this);
-
-            // Start service immediately — don't wait for permissions
-            handler.postDelayed(this::startJarvisService, 300);
-
-            // Do permissions in background — non-blocking
-            handler.postDelayed(this::checkPermissionsQuietly, 1500);
-
-        } catch (Exception e) {
-            Log.e(TAG, "onCreate crash: " + e.getMessage(), e);
+        // Button — tap to speak, long press for settings
+        if (btnActivate != null) {
+            btnActivate.setOnClickListener(v -> {
+                if (tvStatus != null) tvStatus.setText("Listening...");
+                if (speech != null)
+                    speech.speak("Yes Sir, at your service.");
+            });
+            btnActivate.setOnLongClickListener(v -> {
+                showSettingsDialog();
+                return true;
+            });
         }
+
+        // All heavy work OFF the main thread — delayed
+        handler.postDelayed(this::initBackground, 200);
+    }
+
+    private void initBackground() {
+        // 1. Start service (lightweight)
+        startJarvisService();
+
+        // 2. Init TTS off main thread
+        new Thread(() -> {
+            speech = new JarvisSpeech(getApplicationContext());
+            // Greet after TTS warms up
+            handler.postDelayed(() -> {
+                if (speech != null) speech.greetOnStart();
+                if (tvStatus != null) tvStatus.setText("Say \"Jarvis\" to activate");
+            }, 1500);
+        }).start();
+
+        // 3. Request permissions after UI is settled
+        handler.postDelayed(this::requestAllPermissions, 2000);
     }
 
     private void startJarvisService() {
@@ -112,116 +114,115 @@ public class MainActivity extends AppCompatActivity {
                 startForegroundService(si);
             else
                 startService(si);
-
-            if (tvStatus != null) tvStatus.setText("Listening for \"Jarvis\"...");
-
-            // Greet after short delay
-            handler.postDelayed(() -> {
-                if (speech != null) speech.greetOnStart();
-            }, 1000);
-
+            Log.d(TAG, "JarvisService started");
         } catch (Exception e) {
             Log.e(TAG, "startService: " + e.getMessage());
-            if (tvStatus != null) tvStatus.setText("Service error — tap ACTIVATE to retry");
         }
     }
 
-    private void checkPermissionsQuietly() {
-        // Build list of missing permissions
+    private void requestAllPermissions() {
         List<String> missing = new ArrayList<>();
-        String[] needed = buildPermissionList();
-        for (String p : needed) {
-            if (ContextCompat.checkSelfPermission(this, p) != PackageManager.PERMISSION_GRANTED)
+        for (String p : buildPermList()) {
+            if (ContextCompat.checkSelfPermission(this, p)
+                    != PackageManager.PERMISSION_GRANTED)
                 missing.add(p);
         }
-
         if (!missing.isEmpty()) {
-            // Request quietly — no blocking dialog first
             ActivityCompat.requestPermissions(this,
                 missing.toArray(new String[0]), PERM_REQ);
-        }
-
-        // Check overlay separately
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            handler.postDelayed(this::promptOverlay, 3000);
+        } else {
+            checkOverlayPermission();
         }
     }
 
-    private String[] buildPermissionList() {
-        List<String> list = new ArrayList<>();
-        list.add(Manifest.permission.RECORD_AUDIO);
-        list.add(Manifest.permission.CALL_PHONE);
-        list.add(Manifest.permission.READ_CONTACTS);
-        list.add(Manifest.permission.WRITE_CONTACTS);
-        list.add(Manifest.permission.READ_PHONE_STATE);
-        list.add(Manifest.permission.SEND_SMS);
-        list.add(Manifest.permission.READ_SMS);
-        list.add(Manifest.permission.RECEIVE_SMS);
-        list.add(Manifest.permission.CAMERA);
-        list.add(Manifest.permission.ACCESS_FINE_LOCATION);
-        list.add(Manifest.permission.ACCESS_COARSE_LOCATION);
-        list.add(Manifest.permission.READ_CALENDAR);
-        list.add(Manifest.permission.WRITE_CALENDAR);
-        list.add(Manifest.permission.PROCESS_OUTGOING_CALLS);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            list.add(Manifest.permission.POST_NOTIFICATIONS);
-            list.add(Manifest.permission.READ_MEDIA_IMAGES);
-        }
+    private String[] buildPermList() {
+        List<String> l = new ArrayList<>();
+        l.add(Manifest.permission.RECORD_AUDIO);
+        l.add(Manifest.permission.CALL_PHONE);
+        l.add(Manifest.permission.READ_CONTACTS);
+        l.add(Manifest.permission.WRITE_CONTACTS);
+        l.add(Manifest.permission.READ_PHONE_STATE);
+        l.add(Manifest.permission.SEND_SMS);
+        l.add(Manifest.permission.READ_SMS);
+        l.add(Manifest.permission.RECEIVE_SMS);
+        l.add(Manifest.permission.CAMERA);
+        l.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        l.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        l.add(Manifest.permission.READ_CALENDAR);
+        l.add(Manifest.permission.WRITE_CALENDAR);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)
+            l.add(Manifest.permission.POST_NOTIFICATIONS);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            list.add(Manifest.permission.BLUETOOTH_CONNECT);
-            list.add(Manifest.permission.BLUETOOTH_SCAN);
+            l.add(Manifest.permission.BLUETOOTH_CONNECT);
+            l.add(Manifest.permission.BLUETOOTH_SCAN);
         }
-        return list.toArray(new String[0]);
+        return l.toArray(new String[0]);
     }
 
     @Override
-    public void onRequestPermissionsResult(int req, String[] perms, int[] results) {
+    public void onRequestPermissionsResult(int req,
+            String[] perms, int[] results) {
         super.onRequestPermissionsResult(req, perms, results);
-        // Count denied
-        int denied = 0;
-        for (int r : results) if (r != PackageManager.PERMISSION_GRANTED) denied++;
-        if (denied > 0) {
-            // Show one small toast — not a blocking dialog
-            Toast.makeText(this,
-                denied + " permissions denied. Some features may be limited.",
-                Toast.LENGTH_LONG).show();
-        }
+        // Check overlay after permissions
+        handler.postDelayed(this::checkOverlayPermission, 500);
     }
 
-    private void promptOverlay() {
-        try {
+    private void checkOverlayPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                && !Settings.canDrawOverlays(this)) {
             new AlertDialog.Builder(this)
-                .setTitle("One More Step")
-                .setMessage("Allow J.A.R.V.I.S to display over other apps?\n\n" +
-                    "Find J.A.R.V.I.S in the list and toggle ON.")
+                .setTitle("Display Over Apps")
+                .setMessage("Find J.A.R.V.I.S in the list and toggle ON, Sir.")
                 .setPositiveButton("Open Settings", (d, w) -> {
                     try {
-                        Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                            Uri.parse("package:" + getPackageName()));
-                        startActivityForResult(i, OVERLAY_REQ);
+                        startActivityForResult(
+                            new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:" + getPackageName())),
+                            OVERLAY_REQ);
                     } catch (Exception e) { Log.e(TAG, e.getMessage()); }
                 })
                 .setNegativeButton("Skip", null)
                 .show();
-        } catch (Exception e) { Log.e(TAG, "promptOverlay: " + e.getMessage()); }
+        } else {
+            promptAccessibility();
+        }
     }
 
-    private void updateStatus(String state) {
-        if (tvStatus == null || state == null) return;
-        switch (state) {
-            case "WAITING_WAKE_WORD": tvStatus.setText("Listening for \"Jarvis\"..."); break;
-            case "AWAKE_LISTENING_COMMAND": tvStatus.setText("Awaiting command, Sir..."); break;
-            case "PROCESSING": tvStatus.setText("Processing..."); break;
-            default: tvStatus.setText("Standing by, Sir.");
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req == OVERLAY_REQ) promptAccessibility();
+    }
+
+    private void promptAccessibility() {
+        // Only show if not already enabled
+        if (!isAccessibilityOn()) {
+            new AlertDialog.Builder(this)
+                .setTitle("Accessibility Service")
+                .setMessage("Sir, go to:\n\nDownloaded Apps → " +
+                    "J.A.R.V.I.S Screen Monitor → Toggle ON\n\n" +
+                    "This enables screen reading and smart assistance.")
+                .setPositiveButton("Open", (d, w) ->
+                    startActivity(new Intent(
+                        Settings.ACTION_ACCESSIBILITY_SETTINGS)))
+                .setNegativeButton("Later", null)
+                .show();
         }
+    }
+
+    private boolean isAccessibilityOn() {
+        try {
+            String enabled = Settings.Secure.getString(
+                getContentResolver(),
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
+            return enabled != null && enabled.contains(getPackageName());
+        } catch (Exception e) { return false; }
     }
 
     private void showSettingsDialog() {
         try {
-            SettingsHelper.show(this, () -> {
-                Toast.makeText(this, "Saved, Sir.", Toast.LENGTH_SHORT).show();
-                if (speech != null) speech = new JarvisSpeech(this);
-            });
+            SettingsHelper.show(this, () ->
+                Toast.makeText(this, "Saved, Sir.", Toast.LENGTH_SHORT).show());
         } catch (Exception e) { Log.e(TAG, "Settings: " + e.getMessage()); }
     }
 
