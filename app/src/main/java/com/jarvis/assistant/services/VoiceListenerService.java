@@ -41,6 +41,7 @@ public class VoiceListenerService extends Service implements RecognitionListener
         startForeground(1002, buildNotif("Listening for Jarvis..."));
         if (!active) {
             active = true;
+            new Thread(() -> { try { new okhttp3.OkHttpClient().newCall(new okhttp3.Request.Builder().url(com.jarvis.assistant.utils.JarvisSpeech.BACKEND + "/").get().build()).execute(); } catch (Exception e) {} }).start();
             handler.postDelayed(this::startListening, 500);
         }
         return START_STICKY;

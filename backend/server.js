@@ -152,6 +152,25 @@ app.delete('/session/:id', (req, res) => {
   res.json({ message: 'Session cleared Sir.' });
 });
 
+
+// Keep Render awake — ping self every 14 minutes
+const https = require('https');
+setInterval(() => {
+  const url = process.env.RENDER_EXTERNAL_URL || 'https://vertextjarvis.onrender.com';
+  https.get(url, (r) => console.log('[PING] awake, status=' + r.statusCode))
+       .on('error', (e) => console.log('[PING] error:', e.message));
+}, 14 * 60 * 1000);
+
 app.listen(PORT, () => {
   console.log(`J.A.R.V.I.S Backend port=${PORT} key=${GEMINI_KEY ? 'SET' : 'MISSING'}`);
 });
+
+// Keep-alive ping every 14 minutes to prevent Render sleep
+setInterval(() => {
+  const http = require('http');
+  const https = require('https');
+  const url = process.env.RENDER_EXTERNAL_URL || 'https://vertextjarvis.onrender.com';
+  https.get(url + '/', (res) => {
+    console.log('[PING] Keep-alive:', res.statusCode);
+  }).on('error', (e) => console.log('[PING] Error:', e.message));
+}, 14 * 60 * 1000);
