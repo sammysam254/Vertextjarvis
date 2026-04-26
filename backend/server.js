@@ -86,6 +86,54 @@ async function geminiAI(message, deviceId) {
   return text;
 }
 
+
+// Pre-cached responses for instant playback
+const audioCache = new Map();
+
+async function getCachedTTS(text, voice = 'Charon') {
+  const key = text + voice;
+  if (audioCache.has(key)) {
+    console.log('[CACHE] Hit:', text.substring(0, 40));
+    return audioCache.get(key);
+  }
+  const result = await geminiTTS(text, voice);
+  audioCache.set(key, result);
+  console.log('[CACHE] Stored:', text.substring(0, 40));
+  return result;
+}
+
+// Pre-warm cache on startup with common responses
+async function warmCache() {
+  const phrases = [
+    'Yes Sir.',
+    'At your service Sir.',
+    'Right away Sir.',
+    'Consider it done Sir.',
+    'One moment Sir.',
+    'Of course Sir.',
+    'Understood Sir.',
+    'Very well Sir.',
+    'Good morning Sir. Jarvis is online and at your service.',
+    'Good afternoon Sir. Jarvis is online and at your service.',
+    'Good evening Sir. Jarvis is online and at your service.',
+    'How may I assist you Sir.',
+    'I am listening Sir.'
+  ];
+  console.log('[CACHE] Warming up', phrases.length, 'phrases...');
+  for (const phrase of phrases) {
+    try {
+      await getCachedTTS(phrase);
+      await new Promise(r => setTimeout(r, 500)); // avoid rate limit
+    } catch (e) {
+      console.log('[CACHE] Failed:', phrase, e.message);
+    }
+  }
+  console.log('[CACHE] Warm-up complete');
+}
+
+// Start warming after 2 seconds
+setTimeout(warmCache, 2000);
+
 app.get('/', (req, res) => {
   res.json({ status: 'online', service: 'J.A.R.V.I.S', key_set: !!GEMINI_KEY });
 });
@@ -96,7 +144,7 @@ app.post('/voice', async (req, res) => {
     const { text, voice = 'Charon' } = req.body;
     if (!text) return res.status(400).json({ error: 'text required' });
     console.log(`[TTS] "${text.substring(0, 50)}"`);
-    const { buffer, mime } = await geminiTTS(text, voice);
+    const { buffer, mime } = await getCachedTTS(text, voice);
     console.log(`[TTS] OK bytes=${buffer.length}`);
     res.json({ audio: buffer.toString('base64'), mimeType: mime });
   } catch (e) {

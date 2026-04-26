@@ -37,36 +37,38 @@ public class JarvisCommandProcessor {
 
     public void processCommand(String command) {
         if (command == null || command.trim().isEmpty()) return;
-        String cmd = command.toLowerCase().trim();
-        // Remove wake word if present
-        cmd = cmd.replaceAll("^(jarvis|travis|davis|jervis)\\s*", "").trim();
+        String cmd = command.toLowerCase().trim()
+            .replaceAll("^(jarvis|travis|davis|jervis)\\s*", "").trim();
         if (cmd.isEmpty()) return;
 
-        Log.d(TAG, "Processing: " + cmd);
+        Log.d(TAG, "Command: " + cmd);
         broadcastUI("command", cmd);
 
+        // Route command
         if (has(cmd, "time", "what time")) { handleTime(); }
         else if (has(cmd, "date", "day", "today")) { handleDate(); }
         else if (has(cmd, "call", "ring", "dial", "phone")) { handleCall(cmd); }
-        else if (has(cmd, "text", "sms", "send message")) { handleSMS(cmd); }
-        else if (has(cmd, "wifi", "wi-fi")) { handleWifi(cmd); }
-        else if (has(cmd, "bluetooth")) { handleBluetooth(cmd); }
+        else if (has(cmd, "text", "sms", "send message")) { handleSMS(); }
+        else if (has(cmd, "wifi", "wi-fi")) { handleWifi(); }
+        else if (has(cmd, "bluetooth")) { handleBluetooth(); }
         else if (has(cmd, "volume", "louder", "quieter", "mute", "unmute", "silent")) { handleVolume(cmd); }
-        else if (has(cmd, "flashlight", "torch", "light")) { handleFlashlight(cmd); }
+        else if (has(cmd, "flashlight", "torch")) { handleFlashlight(cmd); }
         else if (has(cmd, "alarm", "wake me", "remind me")) { handleAlarm(cmd); }
         else if (has(cmd, "screenshot", "capture screen")) { handleScreenshot(); }
         else if (has(cmd, "read screen", "what on screen", "what's on screen")) { handleReadScreen(); }
         else if (has(cmd, "open", "launch", "start")) { handleOpen(cmd); }
         else if (has(cmd, "navigate", "directions", "take me to", "go to")) { handleNavigate(cmd); }
         else if (has(cmd, "search", "google", "look up")) { handleSearch(cmd); }
-        else if (has(cmd, "play music", "play song", "music", "spotify", "youtube music")) { handleMusic(); }
+        else if (has(cmd, "music", "spotify", "play")) { handleMusic(); }
         else if (has(cmd, "battery", "charge")) { handleBattery(); }
         else if (has(cmd, "settings")) { handleSettings(); }
-        else if (has(cmd, "stop", "quiet", "shut up", "enough")) { speech.stop(); }
-        else if (has(cmd, "goodbye", "bye", "sleep", "dismissed")) { handleDismiss(); }
+        else if (has(cmd, "stop", "quiet", "shut up")) { speech.stop(); }
+        else if (has(cmd, "goodbye", "bye", "dismissed")) { handleDismiss(); }
         else if (has(cmd, "who are you", "what are you")) { handleIntro(); }
         else { handleAI(cmd); }
     }
+
+    // ── INSTANT HANDLERS (no network needed) ──────────────────────────────────
 
     private void handleTime() {
         Calendar c = Calendar.getInstance();
@@ -87,74 +89,83 @@ public class JarvisCommandProcessor {
             c.get(Calendar.DAY_OF_MONTH)));
     }
 
+    private void handleBattery() {
+        int level = JarvisUtils.getBatteryLevel(context);
+        String status = JarvisUtils.getBatteryStatus(context);
+        respond("Battery is at " + level + " percent, " + status + " Sir.");
+    }
+
+    private void handleDismiss() {
+        String[] msgs = {"Understood Sir.", "Very well Sir.", "Standing by Sir."};
+        respond(msgs[(int)(Math.random() * msgs.length)]);
+    }
+
+    private void handleIntro() {
+        respond("I am Jarvis, your personal AI assistant Sir. Always at your service.");
+    }
+
+    // ── DEVICE ACTIONS (instant respond + execute) ────────────────────────────
+
     private void handleCall(String cmd) {
-        String target = cmd.replaceAll("(call|phone|ring|dial|please)", "").trim();
+        String target = cmd.replaceAll("\\b(call|phone|ring|dial|please)\\b", "").trim();
         if (target.isEmpty()) { respond("Who shall I call Sir?"); return; }
-        respond("Calling " + target + " now Sir.");
+        respond("Calling " + target + " Sir.");
         handler.postDelayed(() -> {
             try {
                 Intent i = new Intent(Intent.ACTION_CALL);
                 i.setData(Uri.parse("tel:" + Uri.encode(target)));
                 i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 context.startActivity(i);
-            } catch (Exception e) { respond("Unable to place that call Sir."); }
-        }, 1000);
+            } catch (Exception e) { Log.e(TAG, e.getMessage()); }
+        }, 1500);
     }
 
-    private void handleSMS(String cmd) {
+    private void handleSMS() {
         respond("Opening messages Sir.");
         handler.postDelayed(() -> {
             Intent i = new Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:"));
             i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             try { context.startActivity(i); } catch (Exception e) { Log.e(TAG, e.getMessage()); }
-        }, 800);
+        }, 1500);
     }
 
-    private void handleWifi(String cmd) {
-        respond("Opening WiFi settings Sir.");
-        handler.postDelayed(() -> {
-            Intent i = new Intent(Settings.ACTION_WIFI_SETTINGS);
-            i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            try { context.startActivity(i); } catch (Exception e) { Log.e(TAG, e.getMessage()); }
-        }, 800);
+    private void handleWifi() {
+        respond("Opening WiFi Sir.");
+        launch(new Intent(Settings.ACTION_WIFI_SETTINGS));
     }
 
-    private void handleBluetooth(String cmd) {
-        respond("Opening Bluetooth settings Sir.");
-        handler.postDelayed(() -> {
-            Intent i = new Intent(Settings.ACTION_BLUETOOTH_SETTINGS);
-            i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            try { context.startActivity(i); } catch (Exception e) { Log.e(TAG, e.getMessage()); }
-        }, 800);
+    private void handleBluetooth() {
+        respond("Opening Bluetooth Sir.");
+        launch(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
     }
 
     private void handleVolume(String cmd) {
         AudioManager audio = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
         if (audio == null) return;
-        if (has(cmd, "mute", "silent", "silence")) {
+        if (has(cmd, "mute", "silent")) {
             try { audio.setRingerMode(AudioManager.RINGER_MODE_SILENT); } catch (Exception e) {}
-            respond("Device silenced Sir.");
-        } else if (has(cmd, "unmute", "normal")) {
+            respond("Silenced Sir.");
+        } else if (has(cmd, "unmute")) {
             try { audio.setRingerMode(AudioManager.RINGER_MODE_NORMAL); } catch (Exception e) {}
-            respond("Sound restored Sir.");
-        } else if (has(cmd, "max", "full", "maximum")) {
+            respond("Sound on Sir.");
+        } else if (has(cmd, "max", "full")) {
             audio.setStreamVolume(AudioManager.STREAM_MUSIC,
                 audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC), 0);
-            respond("Volume at maximum Sir.");
-        } else if (has(cmd, "up", "raise", "higher", "louder")) {
-            int cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
+            respond("Maximum volume Sir.");
+        } else if (has(cmd, "up", "raise", "louder")) {
             audio.setStreamVolume(AudioManager.STREAM_MUSIC,
-                Math.min(audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC), cur + 2), 0);
-            respond("Volume raised Sir.");
+                Math.min(audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC),
+                    audio.getStreamVolume(AudioManager.STREAM_MUSIC) + 2), 0);
+            respond("Volume up Sir.");
         } else if (has(cmd, "down", "lower", "quieter")) {
-            int cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC);
-            audio.setStreamVolume(AudioManager.STREAM_MUSIC, Math.max(0, cur - 2), 0);
-            respond("Volume lowered Sir.");
+            audio.setStreamVolume(AudioManager.STREAM_MUSIC,
+                Math.max(0, audio.getStreamVolume(AudioManager.STREAM_MUSIC) - 2), 0);
+            respond("Volume down Sir.");
         }
     }
 
     private void handleFlashlight(String cmd) {
-        boolean on = !has(cmd, "off", "disable", "turn off");
+        boolean on = !has(cmd, "off", "disable");
         JarvisUtils.toggleFlashlight(context, on);
         respond(on ? "Torch on Sir." : "Torch off Sir.");
     }
@@ -173,155 +184,127 @@ public class JarvisCommandProcessor {
                 i.putExtra(AlarmClock.EXTRA_SKIP_UI, false);
                 i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 try { context.startActivity(i); } catch (Exception e) { Log.e(TAG, e.getMessage()); }
-            }, 1200);
+            }, 1500);
         } else {
             respond("Opening alarms Sir.");
-            handler.postDelayed(() -> {
-                Intent i = new Intent(AlarmClock.ACTION_SHOW_ALARMS);
-                i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                try { context.startActivity(i); } catch (Exception e) { Log.e(TAG, e.getMessage()); }
-            }, 800);
+            launch(new Intent(AlarmClock.ACTION_SHOW_ALARMS));
         }
     }
 
     private void handleScreenshot() {
-        respond("Taking screenshot Sir.");
-        handler.postDelayed(() -> {
-            Intent i = new Intent("com.jarvis.TAKE_SCREENSHOT");
-            context.sendBroadcast(i);
-        }, 500);
+        respond("Screenshot taken Sir.");
+        handler.postDelayed(() ->
+            context.sendBroadcast(new Intent("com.jarvis.TAKE_SCREENSHOT")), 500);
     }
 
     private void handleReadScreen() {
-        if (lastScreenContent != null && !lastScreenContent.isEmpty()) {
-            respond("On your screen Sir: " + lastScreenContent.substring(0, Math.min(200, lastScreenContent.length())));
-        } else {
-            respond("I cannot read the screen without accessibility permission Sir.");
-        }
+        if (lastScreenContent != null && !lastScreenContent.isEmpty())
+            respond("On screen: " + lastScreenContent.substring(0, Math.min(150, lastScreenContent.length())));
+        else
+            respond("Accessibility service needed to read screen Sir.");
     }
 
     private void handleOpen(String cmd) {
-        // Extract app name
-        String appName = cmd
-            .replaceAll("\\b(open|launch|start|please|the|app)\\b", "")
-            .trim();
+        String appName = cmd.replaceAll("\\b(open|launch|start|please|the|app)\\b", "").trim();
         if (appName.isEmpty()) { respond("Which app Sir?"); return; }
-
-        Log.d(TAG, "Opening app: " + appName);
         respond("Opening " + appName + " Sir.");
-
         handler.postDelayed(() -> {
-            // Try to find and open the app
-            if (!openAppByName(appName)) {
-                // Try common app package names
-                if (!tryKnownApp(appName)) {
-                    respond("I could not find " + appName + " Sir. Please check if it is installed.");
-                }
+            if (!openByLabel(appName) && !openByPackage(appName)) {
+                // Try play store search as last resort
+                try {
+                    Intent i = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("market://search?q=" + Uri.encode(appName)));
+                    i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    context.startActivity(i);
+                } catch (Exception e) { Log.e(TAG, e.getMessage()); }
             }
         }, 800);
     }
 
-    private boolean openAppByName(String name) {
+    private boolean openByLabel(String name) {
         try {
             PackageManager pm = context.getPackageManager();
-            List<ApplicationInfo> apps = pm.getInstalledApplications(PackageManager.GET_META_DATA);
-            String nameLower = name.toLowerCase();
-
+            List<ApplicationInfo> apps = pm.getInstalledApplications(0);
+            String n = name.toLowerCase();
             for (ApplicationInfo app : apps) {
                 String label = pm.getApplicationLabel(app).toString().toLowerCase();
-                if (label.contains(nameLower) || nameLower.contains(label)) {
-                    Intent launch = pm.getLaunchIntentForPackage(app.packageName);
-                    if (launch != null) {
-                        launch.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                        context.startActivity(launch);
-                        Log.d(TAG, "Opened: " + app.packageName);
+                if (label.contains(n) || n.contains(label)) {
+                    Intent i = pm.getLaunchIntentForPackage(app.packageName);
+                    if (i != null) {
+                        i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        context.startActivity(i);
                         return true;
                     }
                 }
             }
-        } catch (Exception e) { Log.e(TAG, "openAppByName: " + e.getMessage()); }
+        } catch (Exception e) { Log.e(TAG, e.getMessage()); }
         return false;
     }
 
-    private boolean tryKnownApp(String name) {
+    private boolean openByPackage(String name) {
         String n = name.toLowerCase();
         String pkg = null;
-
-        if (n.contains("whatsapp") || n.contains("whats")) pkg = "com.whatsapp";
-        else if (n.contains("facebook") || n.contains("fb")) pkg = "com.facebook.katana";
-        else if (n.contains("instagram") || n.contains("insta")) pkg = "com.instagram.android";
-        else if (n.contains("twitter") || n.contains("x app")) pkg = "com.twitter.android";
+        if (n.contains("whatsapp")) pkg = "com.whatsapp";
+        else if (n.contains("facebook")) pkg = "com.facebook.katana";
+        else if (n.contains("instagram")) pkg = "com.instagram.android";
+        else if (n.contains("twitter") || n.contains("x ")) pkg = "com.twitter.android";
         else if (n.contains("youtube")) pkg = "com.google.android.youtube";
-        else if (n.contains("gmail") || n.contains("email")) pkg = "com.google.android.gm";
-        else if (n.contains("maps") || n.contains("google maps")) pkg = "com.google.android.apps.maps";
-        else if (n.contains("chrome") || n.contains("browser")) pkg = "com.android.chrome";
-        else if (n.contains("camera")) pkg = "android.media.action.IMAGE_CAPTURE";
-        else if (n.contains("gallery") || n.contains("photos")) pkg = "com.google.android.apps.photos";
+        else if (n.contains("gmail")) pkg = "com.google.android.gm";
+        else if (n.contains("maps")) pkg = "com.google.android.apps.maps";
+        else if (n.contains("chrome")) pkg = "com.android.chrome";
         else if (n.contains("spotify")) pkg = "com.spotify.music";
         else if (n.contains("telegram")) pkg = "org.telegram.messenger";
         else if (n.contains("tiktok")) pkg = "com.zhiliaoapp.musically";
         else if (n.contains("netflix")) pkg = "com.netflix.mediaclient";
-        else if (n.contains("calculator") || n.contains("calc")) pkg = "com.android.calculator2";
+        else if (n.contains("calculator")) pkg = "com.android.calculator2";
+        else if (n.contains("camera")) pkg = "android.media.action.STILL_IMAGE_CAMERA";
+        else if (n.contains("gallery") || n.contains("photos")) pkg = "com.google.android.apps.photos";
+        else if (n.contains("play store")) pkg = "com.android.vending";
+        else if (n.contains("messages") || n.contains("sms")) pkg = "com.google.android.apps.messaging";
         else if (n.contains("clock") || n.contains("alarm")) pkg = "com.android.deskclock";
         else if (n.contains("contacts")) pkg = "com.android.contacts";
-        else if (n.contains("calendar")) pkg = "com.android.calendar";
-        else if (n.contains("settings")) pkg = Settings.ACTION_SETTINGS;
-        else if (n.contains("play store") || n.contains("play")) pkg = "com.android.vending";
-        else if (n.contains("messages") || n.contains("sms")) pkg = "com.android.mms";
 
         if (pkg == null) return false;
-
         try {
-            Intent i;
-            if (pkg.equals(Settings.ACTION_SETTINGS)) {
-                i = new Intent(Settings.ACTION_SETTINGS);
-            } else if (pkg.equals("android.media.action.IMAGE_CAPTURE")) {
-                i = new Intent(pkg);
-            } else {
-                i = context.getPackageManager().getLaunchIntentForPackage(pkg);
-                if (i == null) return false;
-            }
+            Intent i = context.getPackageManager().getLaunchIntentForPackage(pkg);
+            if (i == null) i = new Intent(pkg);
             i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             context.startActivity(i);
             return true;
-        } catch (Exception e) {
-            Log.e(TAG, "tryKnownApp: " + e.getMessage());
-            return false;
-        }
+        } catch (Exception e) { return false; }
     }
 
     private void handleNavigate(String cmd) {
-        String dest = cmd.replaceAll(
-            "\\b(navigate|navigation|directions|take me to|get to|go to|please)\\b", "").trim();
+        String dest = cmd.replaceAll("\\b(navigate|directions|take me to|get to|go to|please)\\b","").trim();
         if (dest.isEmpty()) { respond("Where to Sir?"); return; }
         respond("Navigating to " + dest + " Sir.");
         handler.postDelayed(() -> {
             try {
-                Uri uri = Uri.parse("google.navigation:q=" + Uri.encode(dest));
-                Intent i = new Intent(Intent.ACTION_VIEW, uri);
+                Intent i = new Intent(Intent.ACTION_VIEW,
+                    Uri.parse("google.navigation:q=" + Uri.encode(dest)));
                 i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                 context.startActivity(i);
             } catch (Exception e) {
                 try {
-                    Uri uri = Uri.parse("https://maps.google.com/?q=" + Uri.encode(dest));
-                    Intent i = new Intent(Intent.ACTION_VIEW, uri);
+                    Intent i = new Intent(Intent.ACTION_VIEW,
+                        Uri.parse("https://maps.google.com/?q=" + Uri.encode(dest)));
                     i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     context.startActivity(i);
                 } catch (Exception ex) { Log.e(TAG, ex.getMessage()); }
             }
-        }, 800);
+        }, 1000);
     }
 
     private void handleSearch(String cmd) {
-        String q = cmd.replaceAll("\\b(search|google|look up|find|for|please)\\b", "").trim();
+        String q = cmd.replaceAll("\\b(search|google|look up|find|for|please)\\b","").trim();
         if (q.isEmpty()) { respond("What shall I search Sir?"); return; }
         respond("Searching for " + q + " Sir.");
         handler.postDelayed(() -> {
-            Uri uri = Uri.parse("https://www.google.com/search?q=" + Uri.encode(q));
-            Intent i = new Intent(Intent.ACTION_VIEW, uri);
+            Intent i = new Intent(Intent.ACTION_VIEW,
+                Uri.parse("https://www.google.com/search?q=" + Uri.encode(q)));
             i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             try { context.startActivity(i); } catch (Exception e) { Log.e(TAG, e.getMessage()); }
-        }, 800);
+        }, 1000);
     }
 
     private void handleMusic() {
@@ -329,38 +312,39 @@ public class JarvisCommandProcessor {
         handler.postDelayed(() -> JarvisUtils.openMusicApp(context), 800);
     }
 
-    private void handleBattery() {
-        int level = JarvisUtils.getBatteryLevel(context);
-        String status = JarvisUtils.getBatteryStatus(context);
-        respond("Battery is at " + level + " percent, " + status + " Sir.");
-    }
-
     private void handleSettings() {
         respond("Opening settings Sir.");
-        handler.postDelayed(() -> {
-            Intent i = new Intent(Settings.ACTION_SETTINGS);
-            i.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            try { context.startActivity(i); } catch (Exception e) { Log.e(TAG, e.getMessage()); }
-        }, 800);
+        launch(new Intent(Settings.ACTION_SETTINGS));
     }
 
-    private void handleDismiss() {
-        String[] msgs = {"Understood Sir.", "Very well Sir.", "Standing by Sir.", "Of course Sir."};
-        respond(msgs[(int)(Math.random() * msgs.length)]);
-    }
-
-    private void handleIntro() {
-        respond("I am Jarvis, your personal AI assistant Sir. Always at your service.");
-    }
+    // ── AI (with instant ack) ─────────────────────────────────────────────────
 
     private void handleAI(String cmd) {
-        String context_info = "";
-        if (lastScreenContent != null && !lastScreenContent.isEmpty()) {
-            context_info = " [Screen: " + lastScreenContent.substring(0, Math.min(100, lastScreenContent.length())) + "]";
-        }
-        final String query = cmd + context_info;
-        respond("One moment Sir.");
-        ai.queryAndSpeak(query, speech, text -> broadcastUI("response", text));
+        // Immediately respond with cached "One moment Sir." while fetching
+        speech.speak("One moment Sir.");
+        broadcastUI("response", "Processing...");
+
+        String query = cmd;
+        if (lastScreenContent != null && !lastScreenContent.isEmpty())
+            query += " [Screen: " + lastScreenContent.substring(0, Math.min(80, lastScreenContent.length())) + "]";
+
+        final String finalQuery = query;
+
+        // Fetch AI response while greeting plays
+        ai.query(finalQuery, text -> {
+            broadcastUI("response", text);
+            // Wait for "One moment" to finish then speak answer
+            handler.postDelayed(() -> speech.speak(text), 1000);
+        });
+    }
+
+    // ── HELPERS ───────────────────────────────────────────────────────────────
+
+    private void launch(Intent intent) {
+        handler.postDelayed(() -> {
+            intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try { context.startActivity(intent); } catch (Exception e) { Log.e(TAG, e.getMessage()); }
+        }, 1200);
     }
 
     private void respond(String text) {
