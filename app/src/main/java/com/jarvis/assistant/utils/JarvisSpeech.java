@@ -27,7 +27,7 @@ public class JarvisSpeech {
     private static final String TAG = "JarvisSpeech";
 
     // ── UPDATE THIS after Render deployment ───────────────────────────────────
-    public static final String BACKEND = "https://jarvis-backend-xxxx.onrender.com";
+    public static final String BACKEND = "https://vertextjarvis.onrender.com";
 
     private final Context context;
     private final Handler mainHandler;
