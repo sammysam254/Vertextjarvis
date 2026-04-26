@@ -157,3 +157,44 @@ app.delete('/session/:id', (req, res) => {
 app.listen(PORT, () => {
   console.log(`J.A.R.V.I.S Backend on port ${PORT} | key=${GEMINI_KEY ? 'SET' : 'NOT SET'}`);
 });
+
+// Debug endpoint - shows exact Gemini TTS error
+app.post('/debug-tts', async (req, res) => {
+  const { text = 'Hello Sir.', voice = 'Charon' } = req.body;
+  const results = {};
+  const models = [
+    'gemini-2.5-flash-preview-tts',
+    'gemini-2.5-pro-preview-tts',
+    'gemini-2.5-flash',
+    'gemini-2.0-flash-exp'
+  ];
+  for (const model of models) {
+    try {
+      const r = await axios.post(
+        `${BASE}/${model}:generateContent?key=${GEMINI_KEY}`,
+        {
+          contents: [{ role: 'user', parts: [{ text }] }],
+          generationConfig: {
+            responseModalities: ['AUDIO'],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: voice } } }
+          }
+        },
+        { timeout: 15000 }
+      );
+      const part = r.data?.candidates?.[0]?.content?.parts?.[0];
+      results[model] = {
+        success: !!part?.inlineData?.data,
+        bytes: part?.inlineData?.data ? Buffer.from(part.inlineData.data, 'base64').length : 0,
+        mime: part?.inlineData?.mimeType || 'none',
+        rawKeys: Object.keys(part || {})
+      };
+    } catch (e) {
+      results[model] = {
+        success: false,
+        error: e.response?.data?.error?.message || e.message,
+        status: e.response?.status
+      };
+    }
+  }
+  res.json(results);
+});
