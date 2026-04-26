@@ -25,13 +25,11 @@ import okhttp3.Response;
 public class JarvisSpeech {
 
     private static final String TAG = "JarvisSpeech";
-
-    // ── UPDATE THIS after Render deployment ───────────────────────────────────
     public static final String BACKEND = "https://vertextjarvis.onrender.com";
 
     private final Context context;
     private final Handler mainHandler;
-    private final OkHttpClient http;
+    private OkHttpClient http;
     private TextToSpeech fallbackTts;
     private boolean fallbackReady = false;
 
@@ -41,23 +39,25 @@ public class JarvisSpeech {
         this.context = context;
         this.mainHandler = new Handler(Looper.getMainLooper());
         this.http = new OkHttpClient.Builder()
-            .connectTimeout(15, TimeUnit.SECONDS)
+            .connectTimeout(20, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS)
             .build();
         initFallback();
     }
 
     private void initFallback() {
-        fallbackTts = new TextToSpeech(context, status -> {
-            if (status == TextToSpeech.SUCCESS) {
-                try {
-                    fallbackTts.setLanguage(Locale.UK);
-                    fallbackTts.setSpeechRate(0.85f);
-                    fallbackTts.setPitch(0.75f);
-                    fallbackReady = true;
-                    Log.d(TAG, "Fallback TTS ready");
-                } catch (Exception e) { Log.e(TAG, e.getMessage()); }
-            }
+        mainHandler.post(() -> {
+            fallbackTts = new TextToSpeech(context, status -> {
+                if (status == TextToSpeech.SUCCESS) {
+                    try {
+                        fallbackTts.setLanguage(Locale.UK);
+                        fallbackTts.setSpeechRate(0.85f);
+                        fallbackTts.setPitch(0.75f);
+                        fallbackReady = true;
+                        Log.d(TAG, "Fallback TTS ready");
+                    } catch (Exception e) { Log.e(TAG, e.getMessage()); }
+                }
+            });
         });
     }
 
@@ -69,6 +69,7 @@ public class JarvisSpeech {
             return;
         }
         Log.d(TAG, "speak() → " + text.substring(0, Math.min(50, text.length())));
+        // Always use background thread for network
         new Thread(() -> callBackendVoice(text, cb)).start();
     }
 
@@ -78,44 +79,56 @@ public class JarvisSpeech {
             body.put("text", text);
             body.put("voice", "Charon");
 
+            Log.d(TAG, "Calling backend: " + BACKEND + "/voice");
+
             Request req = new Request.Builder()
                 .url(BACKEND + "/voice")
                 .post(RequestBody.create(body.toString(),
-                    MediaType.get("application/json")))
+                    MediaType.get("application/json; charset=utf-8")))
                 .header("Content-Type", "application/json")
                 .build();
 
             Response resp = http.newCall(req).execute();
+            int code = resp.code();
             String respStr = resp.body().string();
-            Log.d(TAG, "Backend /voice HTTP=" + resp.code());
+            Log.d(TAG, "Backend HTTP=" + code + " len=" + respStr.length());
 
-            if (!resp.isSuccessful()) {
-                Log.e(TAG, "Backend error: " + respStr);
+            if (code != 200) {
+                Log.e(TAG, "Backend error " + code + ": " + respStr);
                 fallback(text, cb);
                 return;
             }
 
             JSONObject json = new JSONObject(respStr);
+
             if (!json.has("audio")) {
-                Log.e(TAG, "No audio in response: " + respStr);
+                Log.e(TAG, "No audio field. Response: " + respStr.substring(0, Math.min(200, respStr.length())));
                 fallback(text, cb);
                 return;
             }
 
-            byte[] audioBytes = Base64.decode(json.getString("audio"), Base64.DEFAULT);
+            String audioB64 = json.getString("audio");
             String mime = json.optString("mimeType", "audio/wav");
             String ext = mime.contains("mp3") ? ".mp3" : ".wav";
+
+            byte[] audioBytes = Base64.decode(audioB64, Base64.DEFAULT);
+            Log.d(TAG, "Audio decoded: " + audioBytes.length + " bytes mime=" + mime);
+
+            if (audioBytes.length < 100) {
+                Log.e(TAG, "Audio too small, likely error");
+                fallback(text, cb);
+                return;
+            }
 
             File f = new File(context.getCacheDir(), "tts_" + UUID.randomUUID() + ext);
             FileOutputStream fos = new FileOutputStream(f);
             fos.write(audioBytes);
             fos.close();
 
-            Log.d(TAG, "Audio ready: " + audioBytes.length + " bytes");
             mainHandler.post(() -> playFile(f, cb));
 
         } catch (Exception e) {
-            Log.e(TAG, "callBackendVoice: " + e.getMessage());
+            Log.e(TAG, "callBackendVoice failed: " + e.getMessage());
             fallback(text, cb);
         }
     }
@@ -132,25 +145,26 @@ public class JarvisSpeech {
             mp.prepare();
             mp.setVolume(1.0f, 1.0f);
             mp.start();
-            Log.d(TAG, "Playing Gemini audio via backend ✓");
+            Log.d(TAG, "Playing Gemini Charon voice ✓ size=" + f.length());
 
             mp.setOnCompletionListener(m -> {
                 m.release(); f.delete();
                 if (cb != null) mainHandler.post(cb::onDone);
             });
             mp.setOnErrorListener((m, w, x) -> {
-                Log.e(TAG, "MediaPlayer error=" + w);
+                Log.e(TAG, "MediaPlayer error w=" + w + " x=" + x);
                 m.release(); f.delete();
                 if (cb != null) mainHandler.post(cb::onDone);
                 return true;
             });
         } catch (Exception e) {
             Log.e(TAG, "playFile: " + e.getMessage());
-            if (cb != null) mainHandler.post(cb::onDone);
+            fallback("", cb);
         }
     }
 
     private void fallback(String text, SpeechCallback cb) {
+        Log.w(TAG, "Using Android TTS fallback for: " + text);
         mainHandler.post(() -> {
             try {
                 if (fallbackTts != null && fallbackReady
@@ -173,7 +187,7 @@ public class JarvisSpeech {
                     if (cb != null) cb.onDone();
                 }
             } catch (Exception e) {
-                Log.e(TAG, "fallback: " + e.getMessage());
+                Log.e(TAG, "fallback TTS: " + e.getMessage());
                 if (cb != null) cb.onDone();
             }
         });
