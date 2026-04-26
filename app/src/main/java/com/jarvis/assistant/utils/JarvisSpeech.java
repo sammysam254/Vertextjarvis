@@ -2,6 +2,7 @@ package com.jarvis.assistant.utils;
 
 import android.content.Context;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.os.Handler;
 import android.os.Looper;
@@ -15,10 +16,8 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.util.Locale;
-import java.util.Set;
 import java.util.UUID;
-import okhttp3.Call;
-import okhttp3.Callback;
+import java.util.concurrent.TimeUnit;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
@@ -29,233 +28,176 @@ public class JarvisSpeech {
 
     private static final String TAG = "JarvisSpeech";
     private static final String GEMINI_KEY = "AIzaSyA4yzazTjmnOdOz2RITHqrCxBzKZDlR7B8";
-    private static final String GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts";
-    private static final String GEMINI_TTS_URL =
+    private static final String TTS_URL =
         "https://generativelanguage.googleapis.com/v1beta/models/" +
-        GEMINI_TTS_MODEL + ":generateContent?key=" + GEMINI_KEY;
+        "gemini-2.5-flash-preview-tts:generateContent?key=" + GEMINI_KEY;
 
     private final Context context;
-    private final OkHttpClient httpClient;
     private final Handler mainHandler;
+    private final OkHttpClient http;
     private TextToSpeech fallbackTts;
     private boolean fallbackReady = false;
 
-    public interface SpeechCallback {
-        void onDone();
-    }
+    public interface SpeechCallback { void onDone(); }
 
     public JarvisSpeech(Context context) {
         this.context = context;
-        this.httpClient = new OkHttpClient.Builder()
-            .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-            .build();
         this.mainHandler = new Handler(Looper.getMainLooper());
-        initFallbackTTS();
+        this.http = new OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .build();
+        initFallback();
     }
 
-    private void initFallbackTTS() {
+    private void initFallback() {
         fallbackTts = new TextToSpeech(context, status -> {
             if (status == TextToSpeech.SUCCESS) {
-                setBestFallbackVoice();
-                fallbackTts.setSpeechRate(0.85f);
-                fallbackTts.setPitch(0.75f);
-                fallbackReady = true;
-                Log.d(TAG, "Fallback TTS ready");
+                try {
+                    fallbackTts.setLanguage(Locale.UK);
+                    fallbackTts.setSpeechRate(0.85f);
+                    fallbackTts.setPitch(0.75f);
+                    fallbackReady = true;
+                    Log.d(TAG, "Fallback TTS ready");
+                } catch (Exception e) { Log.e(TAG, e.getMessage()); }
             }
         });
-    }
-
-    private void setBestFallbackVoice() {
-        try {
-            Set<Voice> voices = fallbackTts.getVoices();
-            if (voices == null) { fallbackTts.setLanguage(Locale.UK); return; }
-            Voice best = null;
-            for (Voice v : voices) {
-                String n = v.getName().toLowerCase();
-                boolean eng = n.contains("en-gb") || n.contains("en_gb")
-                        || n.contains("en-us") || n.contains("en_us");
-                boolean quality = v.getQuality() >= Voice.QUALITY_NORMAL;
-                if (eng && quality) {
-                    if (best == null) best = v;
-                    if (n.contains("en-gb")) { best = v; break; }
-                }
-            }
-            if (best != null) fallbackTts.setVoice(best);
-            else fallbackTts.setLanguage(Locale.UK);
-        } catch (Exception e) {
-            try { fallbackTts.setLanguage(Locale.UK); } catch (Exception ignored) {}
-        }
     }
 
     public void speak(String text) { speak(text, null); }
 
-    public void speak(String text, SpeechCallback callback) {
-        if (text == null || text.isEmpty()) {
-            if (callback != null) callback.onDone();
-            return;
-        }
-        Log.d(TAG, "Speaking via Gemini TTS: " + text.substring(0, Math.min(40, text.length())));
-        speakWithGemini(text, callback);
+    public void speak(final String text, final SpeechCallback cb) {
+        if (text == null || text.isEmpty()) { if (cb != null) cb.onDone(); return; }
+        Log.d(TAG, "Speaking: " + text.substring(0, Math.min(60, text.length())));
+        new Thread(() -> callGeminiTTS(text, cb)).start();
     }
 
-    private void speakWithGemini(String text, SpeechCallback callback) {
+    private void callGeminiTTS(String text, SpeechCallback cb) {
         try {
-            JSONObject prebuiltVoice = new JSONObject();
-            prebuiltVoice.put("voiceName", "Charon");
-
-            JSONObject voiceConfig = new JSONObject();
-            voiceConfig.put("prebuiltVoiceConfig", prebuiltVoice);
-
-            JSONObject speechConfig = new JSONObject();
-            speechConfig.put("voiceConfig", voiceConfig);
-
-            JSONObject genConfig = new JSONObject();
-            genConfig.put("responseModalities", new JSONArray().put("AUDIO"));
-            genConfig.put("speechConfig", speechConfig);
-
             JSONObject part = new JSONObject();
             part.put("text", text);
 
             JSONObject content = new JSONObject();
-            content.put("parts", new JSONArray().put(part));
             content.put("role", "user");
+            content.put("parts", new JSONArray().put(part));
+
+            JSONObject prebuilt = new JSONObject();
+            prebuilt.put("voiceName", "Charon");
+
+            JSONObject voiceCfg = new JSONObject();
+            voiceCfg.put("prebuiltVoiceConfig", prebuilt);
+
+            JSONObject speechCfg = new JSONObject();
+            speechCfg.put("voiceConfig", voiceCfg);
+
+            JSONObject genCfg = new JSONObject();
+            genCfg.put("responseModalities", new JSONArray().put("AUDIO"));
+            genCfg.put("speechConfig", speechCfg);
 
             JSONObject body = new JSONObject();
             body.put("contents", new JSONArray().put(content));
-            body.put("generationConfig", genConfig);
+            body.put("generationConfig", genCfg);
 
-            RequestBody reqBody = RequestBody.create(body.toString(),
-                MediaType.get("application/json; charset=utf-8"));
-
-            Request request = new Request.Builder()
-                .url(GEMINI_TTS_URL)
-                .addHeader("Content-Type", "application/json")
+            RequestBody reqBody = RequestBody.create(
+                body.toString(), MediaType.get("application/json"));
+            Request req = new Request.Builder()
+                .url(TTS_URL)
                 .post(reqBody)
+                .header("Content-Type", "application/json")
                 .build();
 
-            httpClient.newCall(request).enqueue(new Callback() {
-                @Override
-                public void onFailure(Call call, java.io.IOException e) {
-                    Log.e(TAG, "Gemini TTS fail: " + e.getMessage());
-                    speakWithFallback(text, callback);
-                }
+            Response response = http.newCall(req).execute();
+            String respStr = response.body().string();
+            Log.d(TAG, "TTS HTTP=" + response.code() +
+                " preview=" + respStr.substring(0, Math.min(200, respStr.length())));
 
-                @Override
-                public void onResponse(Call call, Response response) throws java.io.IOException {
-                    String respBody = "";
-                    try {
-                        respBody = response.body().string();
-                        Log.d(TAG, "Gemini TTS HTTP " + response.code());
+            JSONObject json = new JSONObject(respStr);
+            if (json.has("error")) {
+                Log.e(TAG, "TTS API err: " + json.getJSONObject("error").getString("message"));
+                fallback(text, cb);
+                return;
+            }
 
-                        JSONObject json = new JSONObject(respBody);
+            JSONObject inlineData = json
+                .getJSONArray("candidates").getJSONObject(0)
+                .getJSONObject("content")
+                .getJSONArray("parts").getJSONObject(0)
+                .getJSONObject("inlineData");
 
-                        if (json.has("error")) {
-                            String err = json.getJSONObject("error").getString("message");
-                            Log.e(TAG, "Gemini TTS error: " + err);
-                            speakWithFallback(text, callback);
-                            return;
-                        }
+            String b64 = inlineData.getString("data");
+            String mime = inlineData.optString("mimeType", "audio/wav");
+            String ext = mime.contains("mp3") ? ".mp3" : ".wav";
 
-                        JSONObject candidate = json
-                            .getJSONArray("candidates").getJSONObject(0);
-                        JSONObject contentObj = candidate.getJSONObject("content");
-                        JSONObject audioPart = contentObj.getJSONArray("parts").getJSONObject(0);
+            byte[] audio = Base64.decode(b64, Base64.DEFAULT);
+            File f = new File(context.getCacheDir(), "tts_" + UUID.randomUUID() + ext);
+            FileOutputStream fos = new FileOutputStream(f);
+            fos.write(audio);
+            fos.close();
 
-                        if (!audioPart.has("inlineData")) {
-                            Log.e(TAG, "No inlineData. Response: " +
-                                respBody.substring(0, Math.min(400, respBody.length())));
-                            speakWithFallback(text, callback);
-                            return;
-                        }
+            Log.d(TAG, "Audio saved: " + f.length() + " bytes, mime=" + mime);
+            mainHandler.post(() -> playFile(f, cb));
 
-                        JSONObject inlineData = audioPart.getJSONObject("inlineData");
-                        String audioBase64 = inlineData.getString("data");
-                        String mimeType = inlineData.optString("mimeType", "audio/wav");
-                        Log.d(TAG, "Got audio! mime=" + mimeType + " b64len=" + audioBase64.length());
-
-                        byte[] audioBytes = Base64.decode(audioBase64, Base64.DEFAULT);
-                        String ext = mimeType.contains("mp3") ? ".mp3" : ".wav";
-                        File tmp = new File(context.getCacheDir(), "j_" + UUID.randomUUID() + ext);
-                        new FileOutputStream(tmp).write(audioBytes);
-
-                        mainHandler.post(() -> playAudio(tmp, callback));
-
-                    } catch (Exception e) {
-                        Log.e(TAG, "Parse error: " + e.getMessage());
-                        speakWithFallback(text, callback);
-                    }
-                }
-            });
         } catch (Exception e) {
-            Log.e(TAG, "Build error: " + e.getMessage());
-            speakWithFallback(text, callback);
+            Log.e(TAG, "callGeminiTTS error: " + e.getMessage());
+            fallback(text, cb);
         }
     }
 
-    private void playAudio(File file, SpeechCallback callback) {
+    private void playFile(File f, SpeechCallback cb) {
         try {
-            MediaPlayer player = new MediaPlayer();
-            player.setAudioAttributes(new AudioAttributes.Builder()
+            MediaPlayer mp = new MediaPlayer();
+            mp.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANT)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .setLegacyStreamType(AudioManager.STREAM_MUSIC)
                 .build());
-            player.setDataSource(file.getAbsolutePath());
-            player.prepare();
-            player.start();
-            Log.d(TAG, "Playing Gemini audio!");
-
-            player.setOnCompletionListener(mp -> {
-                mp.release();
-                file.delete();
-                if (callback != null) mainHandler.post(callback::onDone);
+            mp.setDataSource(f.getAbsolutePath());
+            mp.prepare();
+            mp.setVolume(1.0f, 1.0f);
+            mp.start();
+            Log.d(TAG, "Gemini audio playing ✓ size=" + f.length());
+            mp.setOnCompletionListener(m -> {
+                m.release(); f.delete();
+                if (cb != null) mainHandler.post(cb::onDone);
             });
-            player.setOnErrorListener((mp, what, extra) -> {
-                Log.e(TAG, "MediaPlayer error: " + what);
-                mp.release();
-                file.delete();
-                speakWithFallback("", callback);
+            mp.setOnErrorListener((m, w, x) -> {
+                Log.e(TAG, "MediaPlayer error=" + w + "/" + x);
+                m.release(); f.delete();
+                if (cb != null) mainHandler.post(cb::onDone);
                 return true;
             });
         } catch (Exception e) {
-            Log.e(TAG, "playAudio error: " + e.getMessage());
-            if (callback != null) mainHandler.post(callback::onDone);
+            Log.e(TAG, "playFile error: " + e.getMessage());
+            if (cb != null) mainHandler.post(cb::onDone);
         }
     }
 
-    private void speakWithFallback(String text, SpeechCallback callback) {
+    private void fallback(String text, SpeechCallback cb) {
         mainHandler.post(() -> {
             try {
                 if (fallbackTts != null && fallbackReady && text != null && !text.isEmpty()) {
-                    String id = "j_" + System.currentTimeMillis();
-                    if (callback != null) {
+                    String id = "fb_" + System.currentTimeMillis();
+                    if (cb != null) {
                         fallbackTts.setOnUtteranceProgressListener(new UtteranceProgressListener() {
                             @Override public void onStart(String u) {}
-                            @Override public void onDone(String u) { mainHandler.post(callback::onDone); }
-                            @Override public void onError(String u) { mainHandler.post(callback::onDone); }
+                            @Override public void onDone(String u) { mainHandler.post(cb::onDone); }
+                            @Override public void onError(String u) { mainHandler.post(cb::onDone); }
                         });
                     }
                     fallbackTts.speak(text, TextToSpeech.QUEUE_FLUSH, null, id);
-                } else {
-                    if (callback != null) callback.onDone();
-                }
+                } else { if (cb != null) cb.onDone(); }
             } catch (Exception e) {
-                Log.e(TAG, "Fallback error: " + e.getMessage());
-                if (callback != null) callback.onDone();
+                Log.e(TAG, "fallback: " + e.getMessage());
+                if (cb != null) cb.onDone();
             }
         });
     }
 
-    public void stop() {
-        try { if (fallbackTts != null) fallbackTts.stop(); } catch (Exception ignored) {}
-    }
-
+    public void stop() { try { if (fallbackTts != null) fallbackTts.stop(); } catch (Exception ignored) {} }
     public void shutdown() {
-        try {
-            if (fallbackTts != null) { fallbackTts.stop(); fallbackTts.shutdown(); }
-        } catch (Exception ignored) {}
+        try { if (fallbackTts != null) { fallbackTts.stop(); fallbackTts.shutdown(); } }
+        catch (Exception ignored) {}
     }
-
     public void greetOnStart() {
         int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
         String t = h < 12 ? "morning" : h < 17 ? "afternoon" : "evening";
