@@ -5,184 +5,142 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
-import android.content.Context;
 import android.content.Intent;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.PowerManager;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import com.jarvis.assistant.R;
 import com.jarvis.assistant.ui.MainActivity;
 
-/**
- * JarvisService - The immortal background service.
- * Runs forever, survives device reboots, and orchestrates all assistant features.
- */
 public class JarvisService extends Service {
 
     private static final String TAG = "JarvisService";
-    public static final String CHANNEL_ID = "jarvis_persistent_channel";
-    public static final String CHANNEL_NAME = "J.A.R.V.I.S - Always On Duty";
-    public static final int NOTIFICATION_ID = 1001;
+    public static final String CHANNEL_ID = "jarvis_channel";
+    public static final int NOTIF_ID = 1001;
 
-    private VoiceListenerService voiceListener;
     private PowerManager.WakeLock wakeLock;
-    private JarvisCommandProcessor commandProcessor;
-    private boolean isRunning = false;
-
-    // Broadcast actions for inter-component communication
-    public static final String ACTION_COMMAND_RECEIVED = "com.jarvis.ACTION_COMMAND";
-    public static final String ACTION_SPEAK = "com.jarvis.ACTION_SPEAK";
-    public static final String EXTRA_COMMAND = "command";
-    public static final String EXTRA_TEXT = "text";
+    private Handler handler;
+    private boolean running = false;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        Log.d(TAG, "JarvisService onCreate - Coming online, Sir.");
-        createNotificationChannel();
-        acquireWakeLock();
-        commandProcessor = new JarvisCommandProcessor(this);
+        handler = new Handler(Looper.getMainLooper());
+        createChannel();
+        Log.d(TAG, "JarvisService created");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.d(TAG, "JarvisService onStartCommand");
+        Log.d(TAG, "JarvisService starting");
+        try {
+            // Start foreground immediately with notification
+            startForeground(NOTIF_ID, buildNotification("Standing by, Sir..."));
 
-        // Start as foreground immediately to prevent killing
-        startForeground(NOTIFICATION_ID, buildPersistentNotification());
-
-        if (!isRunning) {
-            isRunning = true;
-            startVoiceListener();
-        }
-
-        // Handle commands passed via intent
-        if (intent != null && intent.hasExtra(EXTRA_COMMAND)) {
-            String command = intent.getStringExtra(EXTRA_COMMAND);
-            if (command != null) {
-                commandProcessor.processCommand(command);
+            if (!running) {
+                running = true;
+                acquireWakeLock();
+                // Start voice listener after short delay
+                handler.postDelayed(this::startVoiceListener, 1000);
             }
+        } catch (Exception e) {
+            Log.e(TAG, "onStartCommand: " + e.getMessage());
         }
-
-        // STICKY - Android will restart if killed
         return START_STICKY;
     }
 
     private void startVoiceListener() {
-        Intent voiceIntent = new Intent(this, VoiceListenerService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(voiceIntent);
-        } else {
-            startService(voiceIntent);
-        }
-        Log.d(TAG, "Voice listener started. Awaiting your commands, Sir.");
-    }
-
-    private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel channel = new NotificationChannel(
-                CHANNEL_ID,
-                CHANNEL_NAME,
-                NotificationManager.IMPORTANCE_LOW
-            );
-            channel.setDescription("J.A.R.V.I.S is standing by, ready to serve.");
-            channel.setShowBadge(false);
-            channel.enableVibration(false);
-            channel.setSound(null, null);
-
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.createNotificationChannel(channel);
-            }
+        try {
+            Intent vi = new Intent(this, VoiceListenerService.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                startForegroundService(vi);
+            else
+                startService(vi);
+            Log.d(TAG, "VoiceListenerService started");
+        } catch (Exception e) {
+            Log.e(TAG, "startVoiceListener: " + e.getMessage());
+            // Retry after 3 seconds
+            handler.postDelayed(this::startVoiceListener, 3000);
         }
     }
 
-    private Notification buildPersistentNotification() {
-        Intent notifIntent = new Intent(this, MainActivity.class);
-        notifIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        PendingIntent pendingIntent = PendingIntent.getActivity(
-            this, 0, notifIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
-        );
+    private void createChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel(
+                CHANNEL_ID, "J.A.R.V.I.S",
+                NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription("J.A.R.V.I.S is running");
+            ch.setShowBadge(false);
+            ch.setSound(null, null);
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (nm != null) nm.createNotificationChannel(ch);
+        }
+    }
+
+    private Notification buildNotification(String text) {
+        Intent intent = new Intent(this, MainActivity.class);
+        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        PendingIntent pi = PendingIntent.getActivity(this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("⬡  J.A.R.V.I.S")
-            .setContentText("At your service, Sir. Say \"Jarvis\" to activate.")
+            .setContentTitle("J.A.R.V.I.S")
+            .setContentText(text)
             .setSmallIcon(R.drawable.ic_jarvis_notif)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(pi)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setSilent(true)
-            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build();
     }
 
     private void acquireWakeLock() {
-        PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
-        if (powerManager != null) {
-            wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "JarvisService::WakeLock"
-            );
-            wakeLock.acquire();
-        }
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm != null) {
+                wakeLock = pm.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK, "JarvisService::Lock");
+                wakeLock.acquire();
+            }
+        } catch (Exception e) { Log.e(TAG, "WakeLock: " + e.getMessage()); }
     }
 
-    /**
-     * Update notification with current status
-     */
-    public void updateNotificationStatus(String status) {
-        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager != null) {
-            Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setContentTitle("⬡  J.A.R.V.I.S")
-                .setContentText(status)
-                .setSmallIcon(R.drawable.ic_jarvis_notif)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setOngoing(true)
-                .setSilent(true)
-                .build();
-            manager.notify(NOTIFICATION_ID, notification);
-        }
+    public void updateNotification(String text) {
+        try {
+            NotificationManager nm =
+                (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (nm != null) nm.notify(NOTIF_ID, buildNotification(text));
+        } catch (Exception e) { Log.e(TAG, e.getMessage()); }
     }
 
     @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
+    public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
-        Log.d(TAG, "JarvisService onDestroy - Restarting immediately...");
-        isRunning = false;
-
-        // Release wake lock
-        if (wakeLock != null && wakeLock.isHeld()) {
-            wakeLock.release();
-        }
-
-        // Restart self — J.A.R.V.I.S never truly goes offline
-        Intent restartIntent = new Intent(this, JarvisService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(restartIntent);
-        } else {
-            startService(restartIntent);
-        }
+        running = false;
+        try { if (wakeLock != null && wakeLock.isHeld()) wakeLock.release(); }
+        catch (Exception e) { Log.e(TAG, e.getMessage()); }
+        // Restart self
+        handler.postDelayed(() -> {
+            try {
+                Intent i = new Intent(this, JarvisService.class);
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+                    startForegroundService(i);
+                else
+                    startService(i);
+            } catch (Exception e) { Log.e(TAG, "Restart: " + e.getMessage()); }
+        }, 1000);
     }
 
     @Override
     public void onTaskRemoved(Intent rootIntent) {
         super.onTaskRemoved(rootIntent);
-        Log.d(TAG, "Task removed - Staying online, Sir.");
-        // Re-schedule restart
-        Intent restartIntent = new Intent(this, JarvisService.class);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(restartIntent);
-        } else {
-            startService(restartIntent);
-        }
+        onDestroy();
     }
 }

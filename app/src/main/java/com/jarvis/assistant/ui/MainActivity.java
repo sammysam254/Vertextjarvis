@@ -46,9 +46,8 @@ public class MainActivity extends AppCompatActivity {
                 String type = intent.getStringExtra("type");
                 runOnUiThread(() -> {
                     if (tvStatus != null && content != null
-                            && !"command".equals(type)) {
+                            && !"command".equals(type))
                         tvStatus.setText(content);
-                    }
                 });
             } catch (Exception e) { Log.e(TAG, e.getMessage()); }
         }
@@ -57,25 +56,18 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-
-        // Crash safety net
         Thread.setDefaultUncaughtExceptionHandler((t, e) ->
             Log.e("JARVIS_CRASH", "FATAL: " + e.getMessage(), e));
 
-        // Set layout FIRST — before anything else
         setContentView(R.layout.activity_simple);
 
-        // Bind views
         tvStatus = findViewById(R.id.tv_status_simple);
         btnActivate = findViewById(R.id.btn_test);
 
-        // Show UI immediately
         if (tvStatus != null) tvStatus.setText("J.A.R.V.I.S — Ready");
 
-        // Button — tap to speak, long press for settings
         if (btnActivate != null) {
             btnActivate.setOnClickListener(v -> {
-                if (tvStatus != null) tvStatus.setText("Listening...");
                 if (speech != null)
                     speech.speak("Yes Sir, at your service.");
             });
@@ -85,26 +77,27 @@ public class MainActivity extends AppCompatActivity {
             });
         }
 
-        // All heavy work OFF the main thread — delayed
-        handler.postDelayed(this::initBackground, 200);
-    }
-
-    private void initBackground() {
-        // 1. Start service (lightweight)
-        startJarvisService();
-
-        // 2. Init TTS off main thread
+        // Step 1: Init TTS on background thread first
         new Thread(() -> {
-            speech = new JarvisSpeech(getApplicationContext());
-            // Greet after TTS warms up
-            handler.postDelayed(() -> {
-                if (speech != null) speech.greetOnStart();
-                if (tvStatus != null) tvStatus.setText("Say \"Jarvis\" to activate");
-            }, 1500);
+            try {
+                speech = new JarvisSpeech(getApplicationContext());
+                // Wait for TTS to warm up
+                Thread.sleep(1500);
+                // Step 2: Greet
+                speech.greetOnStart();
+                // Step 3: Update UI
+                handler.post(() -> {
+                    if (tvStatus != null)
+                        tvStatus.setText("Say \"Jarvis\" to activate");
+                });
+                // Step 4: Start service on main thread
+                handler.postDelayed(() -> startJarvisService(), 500);
+                // Step 5: Ask permissions
+                handler.postDelayed(() -> requestAllPermissions(), 3000);
+            } catch (Exception e) {
+                Log.e(TAG, "Background init: " + e.getMessage());
+            }
         }).start();
-
-        // 3. Request permissions after UI is settled
-        handler.postDelayed(this::requestAllPermissions, 2000);
     }
 
     private void startJarvisService() {
@@ -114,7 +107,7 @@ public class MainActivity extends AppCompatActivity {
                 startForegroundService(si);
             else
                 startService(si);
-            Log.d(TAG, "JarvisService started");
+            Log.d(TAG, "Service started");
         } catch (Exception e) {
             Log.e(TAG, "startService: " + e.getMessage());
         }
@@ -131,7 +124,7 @@ public class MainActivity extends AppCompatActivity {
             ActivityCompat.requestPermissions(this,
                 missing.toArray(new String[0]), PERM_REQ);
         } else {
-            checkOverlayPermission();
+            checkOverlay();
         }
     }
 
@@ -163,67 +156,32 @@ public class MainActivity extends AppCompatActivity {
     public void onRequestPermissionsResult(int req,
             String[] perms, int[] results) {
         super.onRequestPermissionsResult(req, perms, results);
-        // Check overlay after permissions
-        handler.postDelayed(this::checkOverlayPermission, 500);
+        handler.postDelayed(this::checkOverlay, 300);
     }
 
-    private void checkOverlayPermission() {
+    private void checkOverlay() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
                 && !Settings.canDrawOverlays(this)) {
             new AlertDialog.Builder(this)
                 .setTitle("Display Over Apps")
-                .setMessage("Find J.A.R.V.I.S in the list and toggle ON, Sir.")
-                .setPositiveButton("Open Settings", (d, w) -> {
+                .setMessage("Find J.A.R.V.I.S in the list and toggle ON Sir.")
+                .setPositiveButton("Open", (d, w) -> {
                     try {
-                        startActivityForResult(
-                            new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:" + getPackageName())),
+                        startActivityForResult(new Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:" + getPackageName())),
                             OVERLAY_REQ);
                     } catch (Exception e) { Log.e(TAG, e.getMessage()); }
                 })
-                .setNegativeButton("Skip", null)
-                .show();
-        } else {
-            promptAccessibility();
+                .setNegativeButton("Skip", null).show();
         }
-    }
-
-    @Override
-    protected void onActivityResult(int req, int res, Intent data) {
-        super.onActivityResult(req, res, data);
-        if (req == OVERLAY_REQ) promptAccessibility();
-    }
-
-    private void promptAccessibility() {
-        // Only show if not already enabled
-        if (!isAccessibilityOn()) {
-            new AlertDialog.Builder(this)
-                .setTitle("Accessibility Service")
-                .setMessage("Sir, go to:\n\nDownloaded Apps → " +
-                    "J.A.R.V.I.S Screen Monitor → Toggle ON\n\n" +
-                    "This enables screen reading and smart assistance.")
-                .setPositiveButton("Open", (d, w) ->
-                    startActivity(new Intent(
-                        Settings.ACTION_ACCESSIBILITY_SETTINGS)))
-                .setNegativeButton("Later", null)
-                .show();
-        }
-    }
-
-    private boolean isAccessibilityOn() {
-        try {
-            String enabled = Settings.Secure.getString(
-                getContentResolver(),
-                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES);
-            return enabled != null && enabled.contains(getPackageName());
-        } catch (Exception e) { return false; }
     }
 
     private void showSettingsDialog() {
         try {
             SettingsHelper.show(this, () ->
-                Toast.makeText(this, "Saved, Sir.", Toast.LENGTH_SHORT).show());
-        } catch (Exception e) { Log.e(TAG, "Settings: " + e.getMessage()); }
+                Toast.makeText(this, "Saved Sir.", Toast.LENGTH_SHORT).show());
+        } catch (Exception e) { Log.e(TAG, e.getMessage()); }
     }
 
     @Override
@@ -237,7 +195,7 @@ public class MainActivity extends AppCompatActivity {
                 registerReceiver(uiReceiver, f);
                 receiverRegistered = true;
             }
-        } catch (Exception e) { Log.e(TAG, "onResume: " + e.getMessage()); }
+        } catch (Exception e) { Log.e(TAG, e.getMessage()); }
     }
 
     @Override
@@ -248,13 +206,13 @@ public class MainActivity extends AppCompatActivity {
                 unregisterReceiver(uiReceiver);
                 receiverRegistered = false;
             }
-        } catch (Exception e) { Log.e(TAG, "onPause: " + e.getMessage()); }
+        } catch (Exception e) { Log.e(TAG, e.getMessage()); }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
         try { if (speech != null) speech.shutdown(); }
-        catch (Exception e) { Log.e(TAG, "onDestroy: " + e.getMessage()); }
+        catch (Exception e) { Log.e(TAG, e.getMessage()); }
     }
 }
