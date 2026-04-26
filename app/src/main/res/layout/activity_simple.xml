@@ -5,31 +5,72 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:gravity="center"
-    android:background="#0A0E1A">
+    android:background="#0A0E1A"
+    android:padding="24dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="J.A.R.V.I.S"
+        android:textColor="#C0A855"
+        android:textSize="36sp"
+        android:textStyle="bold"
+        android:letterSpacing="0.2"
+        android:gravity="center" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Just A Rather Very Intelligent System"
+        android:textColor="#4A9EFF"
+        android:textSize="11sp"
+        android:gravity="center"
+        android:layout_marginTop="4dp"
+        android:letterSpacing="0.1" />
+
+    <View
+        android:layout_width="200dp"
+        android:layout_height="1dp"
+        android:background="#2A3A55"
+        android:layout_marginTop="24dp"
+        android:layout_marginBottom="24dp" />
 
     <TextView
         android:id="@+id/tv_status_simple"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="J.A.R.V.I.S"
-        android:textColor="#C0A855"
-        android:textSize="32sp" />
+        android:text="Initializing..."
+        android:textColor="#8899AA"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:layout_marginBottom="32dp" />
+
+    <Button
+        android:id="@+id/btn_test"
+        android:layout_width="200dp"
+        android:layout_height="52dp"
+        android:text="ACTIVATE"
+        android:textColor="#0A0E1A"
+        android:textStyle="bold"
+        android:backgroundTint="#C0A855"
+        android:letterSpacing="0.15" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="At your service, Sir."
-        android:textColor="#4A9EFF"
-        android:textSize="14sp"
-        android:layout_marginTop="12dp" />
+        android:text="Say \"Jarvis\" anytime to activate"
+        android:textColor="#445566"
+        android:textSize="12sp"
+        android:gravity="center"
+        android:layout_marginTop="16dp" />
 
-    <Button
-        android:id="@+id/btn_test"
+    <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="ACTIVATE"
-        android:layout_marginTop="24dp"
-        android:backgroundTint="#C0A855"
-        android:textColor="#0A0E1A" />
+        android:text="Long-press ACTIVATE for settings"
+        android:textColor="#334455"
+        android:textSize="11sp"
+        android:gravity="center"
+        android:layout_marginTop="8dp" />
 
 </LinearLayout>
