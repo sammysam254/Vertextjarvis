@@ -1,6 +1,9 @@
 package com.jarvis.assistant.utils;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
@@ -29,9 +32,10 @@ public class JarvisSpeech {
 
     private final Context context;
     private final Handler mainHandler;
-    private OkHttpClient http;
+    private final OkHttpClient http;
     private TextToSpeech fallbackTts;
     private boolean fallbackReady = false;
+    private boolean isSpeaking = false;
 
     public interface SpeechCallback { void onDone(); }
 
@@ -40,9 +44,24 @@ public class JarvisSpeech {
         this.mainHandler = new Handler(Looper.getMainLooper());
         this.http = new OkHttpClient.Builder()
             .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(25, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
             .build();
         initFallback();
+        registerSpeakReceiver();
+    }
+
+    private void registerSpeakReceiver() {
+        try {
+            BroadcastReceiver receiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context ctx, Intent intent) {
+                    String text = intent.getStringExtra("text");
+                    if (text != null) speak(text);
+                }
+            };
+            context.registerReceiver(receiver,
+                new IntentFilter("com.jarvis.SPEAK_TEXT"));
+        } catch (Exception e) { Log.e(TAG, e.getMessage()); }
     }
 
     private void initFallback() {
@@ -51,7 +70,7 @@ public class JarvisSpeech {
                 if (status == TextToSpeech.SUCCESS) {
                     try {
                         fallbackTts.setLanguage(Locale.UK);
-                        fallbackTts.setSpeechRate(0.85f);
+                        fallbackTts.setSpeechRate(0.88f);
                         fallbackTts.setPitch(0.75f);
                         fallbackReady = true;
                         Log.d(TAG, "Fallback TTS ready");
@@ -68,18 +87,24 @@ public class JarvisSpeech {
             if (cb != null) cb.onDone();
             return;
         }
-        Log.d(TAG, "speak() → " + text.substring(0, Math.min(50, text.length())));
-        // Always use background thread for network
-        new Thread(() -> callBackendVoice(text, cb)).start();
+        // Clean text — remove special chars that cause letter-by-letter spelling
+        String cleaned = text
+            .replace("J.A.R.V.I.S", "Jarvis")
+            .replace("J.A.R.V.I.S.", "Jarvis")
+            .replace("A.I.", "AI")
+            .replace("...", " ")
+            .replaceAll("([A-Z])\\.", "$1")  // Remove dots after single capitals
+            .trim();
+
+        Log.d(TAG, "speak: " + cleaned.substring(0, Math.min(60, cleaned.length())));
+        new Thread(() -> callBackend(cleaned, cb)).start();
     }
 
-    private void callBackendVoice(String text, SpeechCallback cb) {
+    private void callBackend(String text, SpeechCallback cb) {
         try {
             JSONObject body = new JSONObject();
             body.put("text", text);
             body.put("voice", "Charon");
-
-            Log.d(TAG, "Calling backend: " + BACKEND + "/voice");
 
             Request req = new Request.Builder()
                 .url(BACKEND + "/voice")
@@ -89,52 +114,42 @@ public class JarvisSpeech {
                 .build();
 
             Response resp = http.newCall(req).execute();
-            int code = resp.code();
             String respStr = resp.body().string();
-            Log.d(TAG, "Backend HTTP=" + code + " len=" + respStr.length());
 
-            if (code != 200) {
-                Log.e(TAG, "Backend error " + code + ": " + respStr);
+            if (!resp.isSuccessful()) {
+                Log.e(TAG, "Backend error " + resp.code());
                 fallback(text, cb);
                 return;
             }
 
             JSONObject json = new JSONObject(respStr);
+            String audioB64 = json.optString("audio", "");
 
-            if (!json.has("audio")) {
-                Log.e(TAG, "No audio field. Response: " + respStr.substring(0, Math.min(200, respStr.length())));
+            if (audioB64.isEmpty()) {
+                Log.e(TAG, "No audio in response");
                 fallback(text, cb);
                 return;
             }
-
-            String audioB64 = json.getString("audio");
-            String mime = json.optString("mimeType", "audio/wav");
-            String ext = mime.contains("mp3") ? ".mp3" : ".wav";
 
             byte[] audioBytes = Base64.decode(audioB64, Base64.DEFAULT);
-            Log.d(TAG, "Audio decoded: " + audioBytes.length + " bytes mime=" + mime);
+            Log.d(TAG, "Audio: " + audioBytes.length + " bytes");
 
-            if (audioBytes.length < 100) {
-                Log.e(TAG, "Audio too small, likely error");
-                fallback(text, cb);
-                return;
-            }
-
+            String mime = json.optString("mimeType", "audio/wav");
+            String ext = mime.contains("mp3") ? ".mp3" : ".wav";
             File f = new File(context.getCacheDir(), "tts_" + UUID.randomUUID() + ext);
-            FileOutputStream fos = new FileOutputStream(f);
-            fos.write(audioBytes);
-            fos.close();
+            new FileOutputStream(f).write(audioBytes);
 
             mainHandler.post(() -> playFile(f, cb));
 
         } catch (Exception e) {
-            Log.e(TAG, "callBackendVoice failed: " + e.getMessage());
+            Log.e(TAG, "callBackend: " + e.getMessage());
             fallback(text, cb);
         }
     }
 
     private void playFile(File f, SpeechCallback cb) {
         try {
+            isSpeaking = true;
             MediaPlayer mp = new MediaPlayer();
             mp.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_ASSISTANT)
@@ -145,26 +160,31 @@ public class JarvisSpeech {
             mp.prepare();
             mp.setVolume(1.0f, 1.0f);
             mp.start();
-            Log.d(TAG, "Playing Gemini Charon voice ✓ size=" + f.length());
+            Log.d(TAG, "Playing Gemini Charon voice ✓");
 
             mp.setOnCompletionListener(m -> {
+                isSpeaking = false;
                 m.release(); f.delete();
                 if (cb != null) mainHandler.post(cb::onDone);
             });
             mp.setOnErrorListener((m, w, x) -> {
-                Log.e(TAG, "MediaPlayer error w=" + w + " x=" + x);
+                isSpeaking = false;
+                Log.e(TAG, "MediaPlayer error w=" + w);
                 m.release(); f.delete();
-                if (cb != null) mainHandler.post(cb::onDone);
+                fallback(text_ref, cb);
                 return true;
             });
         } catch (Exception e) {
+            isSpeaking = false;
             Log.e(TAG, "playFile: " + e.getMessage());
-            fallback("", cb);
+            if (cb != null) mainHandler.post(cb::onDone);
         }
     }
 
+    // temp ref for error handler
+    private String text_ref = "";
+
     private void fallback(String text, SpeechCallback cb) {
-        Log.w(TAG, "Using Android TTS fallback for: " + text);
         mainHandler.post(() -> {
             try {
                 if (fallbackTts != null && fallbackReady
@@ -187,11 +207,12 @@ public class JarvisSpeech {
                     if (cb != null) cb.onDone();
                 }
             } catch (Exception e) {
-                Log.e(TAG, "fallback TTS: " + e.getMessage());
                 if (cb != null) cb.onDone();
             }
         });
     }
+
+    public boolean isSpeaking() { return isSpeaking; }
 
     public void stop() {
         try { if (fallbackTts != null) fallbackTts.stop(); }
@@ -210,6 +231,6 @@ public class JarvisSpeech {
     public void greetOnStart() {
         int h = java.util.Calendar.getInstance().get(java.util.Calendar.HOUR_OF_DAY);
         String t = h < 12 ? "morning" : h < 17 ? "afternoon" : "evening";
-        speak("Good " + t + " Sir. J.A.R.V.I.S is fully operational and at your service.");
+        speak("Good " + t + " Sir. Jarvis is fully operational and at your service.");
     }
 }

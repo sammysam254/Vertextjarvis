@@ -4,254 +4,208 @@ import android.app.Notification;
 import android.app.Service;
 import android.content.Intent;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.util.Log;
 import androidx.core.app.NotificationCompat;
 import com.jarvis.assistant.R;
-import com.jarvis.assistant.utils.JarvisSpeech;
 import java.util.ArrayList;
 import java.util.Locale;
 
-/**
- * Continuously listens for the wake word "Jarvis" then captures full commands.
- * Runs as a foreground service to prevent being killed.
- */
 public class VoiceListenerService extends Service implements RecognitionListener {
 
-    private static final String TAG = "VoiceListenerService";
+    private static final String TAG = "VoiceListener";
     private static final String WAKE_WORD = "jarvis";
-    private static final long RESTART_DELAY_MS = 500;
 
-    private SpeechRecognizer speechRecognizer;
+    private SpeechRecognizer recognizer;
     private JarvisCommandProcessor commandProcessor;
-    private JarvisSpeech speech;
-    private boolean isListeningForWakeWord = true;
-    private boolean isActive = false;
-    private android.os.Handler handler;
-
-    // States
-    public enum ListeningState {
-        IDLE,
-        WAITING_WAKE_WORD,
-        AWAKE_LISTENING_COMMAND,
-        PROCESSING
-    }
-
-    private ListeningState currentState = ListeningState.IDLE;
+    private Handler handler;
+    private boolean isListening = false;
+    private boolean awake = false;
+    private boolean active = false;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        handler = new android.os.Handler(android.os.Looper.getMainLooper());
-        speech = new JarvisSpeech(this);
+        handler = new Handler(Looper.getMainLooper());
         commandProcessor = new JarvisCommandProcessor(this);
-        Log.d(TAG, "VoiceListenerService created.");
+        Log.d(TAG, "VoiceListenerService created");
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(1002, buildListenerNotification("Listening for wake word..."));
-        if (!isActive) {
-            isActive = true;
-            startContinuousListening();
+        startForeground(1002, buildNotif("Listening for Jarvis..."));
+        if (!active) {
+            active = true;
+            handler.postDelayed(this::startListening, 500);
         }
         return START_STICKY;
     }
 
-    private void startContinuousListening() {
-        handler.post(() -> {
-            if (SpeechRecognizer.isRecognitionAvailable(this)) {
-                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
-                speechRecognizer.setRecognitionListener(this);
-                beginListening();
-                Log.d(TAG, "Continuous listening started. Awaiting \"Jarvis\", Sir.");
-            } else {
-                Log.e(TAG, "Speech recognition not available on this device.");
-            }
-        });
-    }
-
-    private void beginListening() {
-        Intent recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-            RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.ENGLISH);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 5);
-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
-
-        // Set longer timeout for command capture
-        if (!isListeningForWakeWord) {
-            recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 500L);
-            recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 2000L);
-            recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L);
+    private void startListening() {
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+            Log.e(TAG, "Speech recognition not available");
+            handler.postDelayed(this::startListening, 5000);
+            return;
         }
-
         try {
-            speechRecognizer.startListening(recognizerIntent);
-            currentState = isListeningForWakeWord ?
-                ListeningState.WAITING_WAKE_WORD : ListeningState.AWAKE_LISTENING_COMMAND;
+            if (recognizer != null) {
+                recognizer.destroy();
+                recognizer = null;
+            }
+            recognizer = SpeechRecognizer.createSpeechRecognizer(this);
+            recognizer.setRecognitionListener(this);
+
+            Intent i = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            i.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.ENGLISH);
+            i.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+            i.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+            i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L);
+            i.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1000L);
+
+            recognizer.startListening(i);
+            isListening = true;
+            Log.d(TAG, "Listening... awake=" + awake);
         } catch (Exception e) {
-            Log.e(TAG, "Error starting listener: " + e.getMessage());
-            restartListenerDelayed();
+            Log.e(TAG, "startListening: " + e.getMessage());
+            restartDelayed(2000);
         }
-    }
-
-    @Override
-    public void onReadyForSpeech(Bundle params) {
-        Log.d(TAG, "Ready for speech.");
-        broadcastState(currentState.name());
-    }
-
-    @Override
-    public void onBeginningOfSpeech() {
-        Log.d(TAG, "Speech detected.");
-    }
-
-    @Override
-    public void onRmsChanged(float rmsdB) {
-        // Used for waveform visualization in UI
-        Intent intent = new Intent("com.jarvis.AUDIO_LEVEL");
-        intent.putExtra("rms", rmsdB);
-        sendBroadcast(intent);
-    }
-
-    @Override
-    public void onBufferReceived(byte[] buffer) {}
-
-    @Override
-    public void onEndOfSpeech() {
-        Log.d(TAG, "End of speech.");
-    }
-
-    @Override
-    public void onError(int error) {
-        String errorMsg = getErrorText(error);
-        Log.w(TAG, "Recognition error: " + errorMsg);
-        // Restart listening immediately on most errors
-        restartListenerDelayed();
     }
 
     @Override
     public void onResults(Bundle results) {
-        ArrayList<String> matches = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+        isListening = false;
+        ArrayList<String> matches = results.getStringArrayList(
+            SpeechRecognizer.RESULTS_RECOGNITION);
         if (matches == null || matches.isEmpty()) {
-            restartListenerDelayed();
+            restartDelayed(300);
             return;
         }
 
-        String spokenText = matches.get(0).toLowerCase().trim();
-        Log.d(TAG, "Heard: " + spokenText);
+        String heard = matches.get(0).toLowerCase().trim();
+        Log.d(TAG, "Heard: " + heard);
 
-        if (isListeningForWakeWord) {
-            // Check if wake word was spoken
-            if (spokenText.contains(WAKE_WORD)) {
-                onWakeWordDetected(spokenText);
+        if (!awake) {
+            // Check for wake word
+            if (heard.contains(WAKE_WORD) || heard.contains("travis")
+                    || heard.contains("jarvis") || heard.contains("davis")
+                    || heard.contains("jervis")) {
+
+                // Extract command after wake word if present
+                String afterWake = heard
+                    .replaceFirst(".*(jarvis|travis|davis|jervis)\\s*", "").trim();
+
+                if (afterWake.length() > 2) {
+                    // Wake word + command in one sentence
+                    Log.d(TAG, "Wake+command: " + afterWake);
+                    awake = true;
+                    executeCommand(afterWake);
+                } else {
+                    // Wake word only — greet and listen for command
+                    awake = true;
+                    greetAndListen();
+                }
             } else {
-                // Not our wake word, keep listening silently
-                restartListenerDelayed();
+                restartDelayed(100);
             }
         } else {
-            // We're in command mode - process whatever was said
-            if (!spokenText.isEmpty()) {
-                processVoiceCommand(spokenText);
+            // Already awake — process command
+            if (heard.length() > 1) {
+                executeCommand(heard);
             } else {
-                // Nothing useful heard after wake word
-                speech.speak("I'm still here, Sir. How may I assist you?");
-                returnToWakeWordMode();
+                awake = false;
+                restartDelayed(100);
             }
         }
     }
 
-    @Override
-    public void onPartialResults(Bundle partialResults) {
-        // Optional: show partial results in UI
-        ArrayList<String> partial = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
-        if (partial != null && !partial.isEmpty()) {
-            Intent intent = new Intent("com.jarvis.PARTIAL_RESULTS");
-            intent.putExtra("partial", partial.get(0));
-            sendBroadcast(intent);
-        }
+    private void greetAndListen() {
+        // Speak greeting then listen for command
+        String[] greetings = {
+            "Yes Sir.",
+            "At your service Sir.",
+            "How may I assist you Sir.",
+            "Yes Sir, go ahead.",
+            "I'm listening Sir."
+        };
+        String greeting = greetings[(int)(Math.random() * greetings.length)];
+
+        // Broadcast to trigger speech
+        Intent intent = new Intent("com.jarvis.SPEAK_TEXT");
+        intent.putExtra("text", greeting);
+        sendBroadcast(intent);
+
+        updateNotif("Awaiting command Sir...");
+
+        // Listen for command after brief pause
+        handler.postDelayed(() -> startListening(), 2000);
     }
 
-    @Override
-    public void onEvent(int eventType, Bundle params) {}
+    private void executeCommand(String command) {
+        Log.d(TAG, "Executing: " + command);
+        awake = false;
+        updateNotif("Processing: " + command);
 
-    private void onWakeWordDetected(String fullPhrase) {
-        Log.d(TAG, "Wake word detected! Full phrase: " + fullPhrase);
+        // Broadcast command to UI
+        Intent uiIntent = new Intent("com.jarvis.UI_UPDATE");
+        uiIntent.putExtra("type", "command");
+        uiIntent.putExtra("content", command);
+        sendBroadcast(uiIntent);
 
-        // Check if the command was combined with wake word (e.g., "Jarvis turn off wifi")
-        String afterWakeWord = fullPhrase.replace(WAKE_WORD, "").trim();
-
-        if (afterWakeWord.length() > 3) {
-            // Command was in the same sentence
-            processVoiceCommand(afterWakeWord);
-        } else {
-            // Wake word only - greet and wait for command
-            isListeningForWakeWord = false;
-            speech.speak(getRandomGreeting(), () -> {
-                updateNotification("Listening for your command...");
-                beginListening();
-            });
-        }
-    }
-
-    private void processVoiceCommand(String command) {
-        Log.d(TAG, "Processing command: " + command);
-        currentState = ListeningState.PROCESSING;
-        updateNotification("Processing: " + command);
-
-        // Send to command processor
+        // Execute command
         commandProcessor.processCommand(command);
 
-        // After processing, return to wake word listening
-        handler.postDelayed(this::returnToWakeWordMode, 3000);
-    }
-
-    private void returnToWakeWordMode() {
-        isListeningForWakeWord = true;
-        updateNotification("Listening for wake word...");
-        restartListenerDelayed();
-    }
-
-    private void restartListenerDelayed() {
+        // Resume listening after command
         handler.postDelayed(() -> {
-            if (speechRecognizer != null) {
-                try {
-                    speechRecognizer.cancel();
-                } catch (Exception ignored) {}
+            updateNotif("Listening for Jarvis...");
+            startListening();
+        }, 4000);
+    }
+
+    @Override
+    public void onPartialResults(Bundle partial) {
+        ArrayList<String> results = partial.getStringArrayList(
+            SpeechRecognizer.RESULTS_RECOGNITION);
+        if (results != null && !results.isEmpty()) {
+            String p = results.get(0).toLowerCase();
+            // Quick wake word detection on partial results
+            if (!awake && (p.contains(WAKE_WORD) || p.contains("travis"))) {
+                Log.d(TAG, "Wake word in partial: " + p);
             }
-            beginListening();
-        }, RESTART_DELAY_MS);
-    }
-
-    private String getRandomGreeting() {
-        String[] greetings = {
-            "Yes Sir, how may I assist you?",
-            "At your service, Sir.",
-            "Good to hear from you, Sir. What do you require?",
-            "Of course, Sir. What shall I do?",
-            "I'm listening, Sir.",
-            "Your wish is my command, Sir.",
-            "Ready and standing by, Sir."
-        };
-        int idx = (int)(Math.random() * greetings.length);
-        return greetings[idx];
-    }
-
-    private void updateNotification(String text) {
-        android.app.NotificationManager manager =
-            (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
-        if (manager != null) {
-            manager.notify(1002, buildListenerNotification(text));
         }
     }
 
-    private Notification buildListenerNotification(String text) {
+    @Override
+    public void onError(int error) {
+        isListening = false;
+        // Most errors just need a restart
+        int delay = (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) ? 1500 : 300;
+        if (error != SpeechRecognizer.ERROR_NO_MATCH &&
+            error != SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
+            Log.w(TAG, "Recognition error: " + error);
+        }
+        restartDelayed(delay);
+    }
+
+    private void restartDelayed(int ms) {
+        handler.postDelayed(this::startListening, ms);
+    }
+
+    private void updateNotif(String text) {
+        android.app.NotificationManager nm =
+            (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (nm != null) nm.notify(1002, buildNotif(text));
+    }
+
+    private Notification buildNotif(String text) {
         return new NotificationCompat.Builder(this, JarvisService.CHANNEL_ID)
-            .setContentTitle("⬡  J.A.R.V.I.S — Voice Active")
+            .setContentTitle("J.A.R.V.I.S")
             .setContentText(text)
             .setSmallIcon(R.drawable.ic_jarvis_notif)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -260,42 +214,28 @@ public class VoiceListenerService extends Service implements RecognitionListener
             .build();
     }
 
-    private void broadcastState(String state) {
-        Intent intent = new Intent("com.jarvis.STATE_CHANGE");
-        intent.putExtra("state", state);
-        sendBroadcast(intent);
-    }
-
-    private String getErrorText(int errorCode) {
-        switch (errorCode) {
-            case SpeechRecognizer.ERROR_AUDIO: return "Audio recording error";
-            case SpeechRecognizer.ERROR_CLIENT: return "Client side error";
-            case SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS: return "Insufficient permissions";
-            case SpeechRecognizer.ERROR_NETWORK: return "Network error";
-            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT: return "Network timeout";
-            case SpeechRecognizer.ERROR_NO_MATCH: return "No match (silence or unrecognized)";
-            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY: return "RecognitionService busy";
-            case SpeechRecognizer.ERROR_SERVER: return "Error from server";
-            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT: return "No speech input";
-            default: return "Unknown error " + errorCode;
-        }
-    }
+    @Override public void onReadyForSpeech(Bundle p) { Log.d(TAG, "Ready"); }
+    @Override public void onBeginningOfSpeech() {}
+    @Override public void onRmsChanged(float rms) {}
+    @Override public void onBufferReceived(byte[] b) {}
+    @Override public void onEndOfSpeech() {}
+    @Override public void onEvent(int t, Bundle p) {}
 
     @Override
-    public IBinder onBind(Intent intent) {
-        return null;
-    }
+    public IBinder onBind(Intent intent) { return null; }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
-        isActive = false;
-        if (speechRecognizer != null) {
-            speechRecognizer.destroy();
+        active = false;
+        if (recognizer != null) {
+            recognizer.destroy();
+            recognizer = null;
         }
-        if (speech != null) {
-            speech.shutdown();
-        }
-        Log.d(TAG, "VoiceListenerService destroyed — restarting.");
+        // Restart self
+        handler.postDelayed(() -> {
+            Intent i = new Intent(this, VoiceListenerService.class);
+            startService(i);
+        }, 1000);
     }
 }
